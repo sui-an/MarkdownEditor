@@ -77,7 +77,7 @@ struct MarkdownTextView: NSViewRepresentable {
         scrollView.horizontalScrollElasticity = .none
 
         // Build text system
-        let textStorage = NSTextStorage()
+        let textStorage = MarkdownTextStorage()
         let layoutManager = NSLayoutManager()
         layoutManager.allowsNonContiguousLayout = true
         textStorage.addLayoutManager(layoutManager)

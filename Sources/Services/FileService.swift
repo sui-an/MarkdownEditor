@@ -1,8 +1,15 @@
 import Foundation
 
 enum FileService {
+    /// Read file content with UTF-8 encoding.
     static func readFile(at url: URL) throws -> String {
         try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// Synchronous read used only during cache-hit fast path (main thread safe because
+    /// the file is already known to exist and is small enough for instant read).
+    static func readFileCached(at url: URL) -> String {
+        (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
     static func writeFile(_ content: String, to url: URL) throws {

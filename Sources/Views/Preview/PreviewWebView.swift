@@ -1,5 +1,66 @@
 import SwiftUI
 import WebKit
+import AppKit
+
+// MARK: - Shared WebView pool for pre-warming
+
+final class WebViewPool {
+    static let shared = WebViewPool()
+
+    private var preWarmedView: WKWebView?
+
+    func dequeue() -> WKWebView {
+        if let view = preWarmedView {
+            preWarmedView = nil
+            return view
+        }
+        return createWebView()
+    }
+
+    func enqueue(_ webView: WKWebView?) {
+        guard let webView else { return }
+        webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
+        webView.navigationDelegate = nil
+
+        preWarmedView?.loadHTMLString("<html><body></body></html>", baseURL: nil)
+        preWarmedView = webView
+    }
+
+    func preWarm() {
+        guard preWarmedView == nil else { return }
+        let view = createWebView()
+        view.loadHTMLString("<html><body></body></html>", baseURL: nil)
+        preWarmedView = view
+    }
+
+    private func createWebView() -> WKWebView {
+        let config = WKWebViewConfiguration()
+
+        if let hljsPath = Bundle.main.path(forResource: "highlight.min", ofType: "js"),
+           let hljsJS = try? String(contentsOfFile: hljsPath) {
+            let script = WKUserScript(source: hljsJS, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+            config.userContentController.addUserScript(script)
+        }
+
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.setValue(false, forKey: "drawsBackground")
+
+        for subview in webView.subviews {
+            if let scrollView = subview as? NSScrollView {
+                scrollView.scrollerStyle = .overlay
+                break
+            }
+        }
+
+        return webView
+    }
+
+    func handleMemoryPressure() {
+        preWarmedView = nil
+    }
+}
+
+// MARK: - PreviewWebView
 
 struct PreviewWebView: NSViewRepresentable {
     @Environment(AppState.self) private var appState
@@ -9,82 +70,42 @@ struct PreviewWebView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> WKWebView {
-        let config = WKWebViewConfiguration()
-
-        if let mermaidPath = Bundle.main.path(forResource: "mermaid.min", ofType: "js"),
-           let mermaidJS = try? String(contentsOfFile: mermaidPath) {
-            let userScript = WKUserScript(
-                source: mermaidJS,
-                injectionTime: .atDocumentEnd,
-                forMainFrameOnly: true
-            )
-            config.userContentController.addUserScript(userScript)
-        }
-
-        let webView = WKWebView(frame: .zero, configuration: config)
-        webView.setValue(false, forKey: "drawsBackground")
+        let webView = WebViewPool.shared.dequeue()
         webView.navigationDelegate = context.coordinator
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        if appState.currentFileURL == nil {
+            if context.coordinator.lastLoadedHTML != "" {
+                context.coordinator.lastLoadedHTML = ""
+                webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
+            }
+            return
+        }
         let html = appState.renderedHTML
-        guard html != context.coordinator.lastLoadedHTML, !html.isEmpty else { return }
+        guard html != context.coordinator.lastLoadedHTML else { return }
         context.coordinator.lastLoadedHTML = html
-
-        if context.coordinator.pageLoaded {
-            // Fast path: inject body content via JS — avoids full DOM rebuild
-            if let body = extractBody(from: html) {
-                let escaped = escapeForJS(body)
-                webView.evaluateJavaScript("window._replaceBody(`\(escaped)`)")
-            }
-        } else {
-            // First load: full page load to establish CSS + JS context
-            webView.loadHTMLString(html, baseURL: nil)
-        }
+        webView.loadHTMLString(html, baseURL: nil)
     }
 
-    private func extractBody(from html: String) -> String? {
-        guard let start = html.range(of: "<body>"),
-              let end = html.range(of: "</body>", range: start.upperBound..<html.endIndex) else {
-            return nil
-        }
-        return String(html[start.upperBound..<end.lowerBound])
-    }
-
-    private func escapeForJS(_ str: String) -> String {
-        var result = ""
-        result.reserveCapacity(str.utf8.count)
-        for char in str {
-            switch char {
-            case "\\": result += "\\\\"
-            case "`":  result += "\\`"
-            case "$":  result += "\\$"
-            default:   result.append(char)
-            }
-        }
-        return result
+    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+        coordinator.lastLoadedHTML = ""
+        WebViewPool.shared.enqueue(nsView)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var lastLoadedHTML: String = ""
-        var pageLoaded = false
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            pageLoaded = true
-            // Define a JS function for incremental body updates.
-            // Kept alive across file switches — no CSS/JS redownload.
-            let js = """
-            window._replaceBody = function(html) {
-                document.body.innerHTML = html;
-                if (typeof mermaid !== 'undefined' && mermaid.run) {
-                    setTimeout(function() {
-                        try { mermaid.run({ nodes: document.querySelectorAll('.mermaid') }); } catch(e) { }
-                    }, 50);
-                }
-            };
-            """
-            webView.evaluateJavaScript(js)
+            webView.evaluateJavaScript("""
+            if (typeof mermaid !== 'undefined') {
+                mermaid.run({ querySelector: '.mermaid' });
+            }
+            if (typeof hljs !== 'undefined') {
+                hljs.highlightAll();
+            }
+            """)
         }
     }
 }

@@ -1,0 +1,6 @@
+module CCmarkGfm {
+    header "/opt/homebrew/opt/cmark-gfm/include/cmark-gfm.h"
+    header "/opt/homebrew/opt/cmark-gfm/include/cmark-gfm-core-extensions.h"
+    link "cmark-gfm"
+    export *
+}

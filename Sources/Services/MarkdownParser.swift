@@ -1,212 +1,179 @@
 import Foundation
+#if canImport(CCmarkGfm)
+import CCmarkGfm
+#endif
 
 enum MarkdownParser {
 
-    private static let headerRegex = try! NSRegularExpression(pattern: #"^(#{1,6})\s+(.+)"#)
-    private static let ulRegex = try! NSRegularExpression(pattern: #"^[\s]*[-*+]\s+(.+)"#)
-    private static let olRegex = try! NSRegularExpression(pattern: #"^[\s]*(\d+)\.\s+(.+)"#)
-    private static let mermaidBlockRegex = try! NSRegularExpression(pattern: #"```mermaid\s*\n([\s\S]*?)```"#, options: [.caseInsensitive])
-    private static let imgRegex = try! NSRegularExpression(pattern: #"!\[([^\]]*)\]\(([^)]+)\)"#)
-    private static let boldRegex = try! NSRegularExpression(pattern: #"(\*\*|__)(.+?)\1"#)
-    private static let italicRegex = try! NSRegularExpression(pattern: #"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)"#)
-    private static let codeRegex = try! NSRegularExpression(pattern: #"`([^`]+)`"#)
-    private static let linkRegex = try! NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^)]+)\)"#)
-    private static let strikeRegex = try! NSRegularExpression(pattern: #"~~(.+?)~~"#)
+    #if canImport(CCmarkGfm)
+    private static var gfmExtensionsRegistered = false
 
+    private static func ensureGFMExtensions() {
+        guard !gfmExtensionsRegistered else { return }
+        cmark_gfm_core_extensions_ensure_registered()
+        gfmExtensionsRegistered = true
+    }
+    #endif
+
+    // MARK: - Public API
+
+    /// Parse markdown to full HTML document. Thread-safe.
     static func parseToHTML(_ markdown: String) -> String {
-        let bodyHTML = convertMarkdownToHTMLBody(markdown)
+        ensureGFMExtensions()
+
+        let mermaidResult = extractMermaidBlocks(markdown)
+        let bodyHTML = renderBody(mermaidResult.text)
+        let finalBody = reinsertMermaidBlocks(bodyHTML, mermaidResult)
+
         let css = Self.previewCSS
-        let mermaidScript = hasMermaidBlocks(in: markdown) ? """
-        <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            if (typeof mermaid !== 'undefined') {
-                mermaid.initialize({ startOnLoad: true, theme: 'default' });
-            }
-        });
-        </script>
-        """ : ""
+        let mermaidScript = mermaidResult.blocks.isEmpty ? "" : mermaidHTML()
 
         return """
         <!DOCTYPE html>
         <html><head><meta charset="utf-8">
-        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>\(css)</style>
-        </head><body>\(bodyHTML)\(mermaidScript)</body></html>
+        \(mermaidScript)
+        </head><body>\(finalBody)</body></html>
         """
     }
 
-    private static func hasMermaidBlocks(in markdown: String) -> Bool {
-        let pattern = #"```mermaid\b"#
-        return markdown.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    /// Parse markdown to HTML body fragment only (no wrapper, no CSS).
+    /// Used for caching the expensive cmark part.
+    static func parseToHTMLBody(_ markdown: String) -> String {
+        ensureGFMExtensions()
+
+        let mermaidResult = extractMermaidBlocks(markdown)
+        let bodyHTML = renderBody(mermaidResult.text)
+        return reinsertMermaidBlocks(bodyHTML, mermaidResult)
     }
 
-    private static func convertMarkdownToHTMLBody(_ markdown: String) -> String {
-        let processed = processMermaidBlocks(in: markdown)
-        return renderMarkdownToHTML(processed)
+    // MARK: - cmark-gfm rendering (with regex fallback)
+
+    #if canImport(CCmarkGfm)
+    private static func renderBody(_ markdown: String) -> String {
+        guard let cstr = markdown.cString(using: .utf8) else { return "" }
+        let len = strlen(cstr)
+        let options = CMARK_OPT_DEFAULT
+
+        guard let doc = cmark_parse_document(cstr, len, options) else {
+            return fallbackRenderBody(markdown)
+        }
+        defer { cmark_node_free(doc) }
+
+        guard let htmlCStr = cmark_render_html(doc, options, nil) else {
+            return fallbackRenderBody(markdown)
+        }
+        defer { free(htmlCStr) }
+
+        return String(cString: htmlCStr)
+    }
+    #else
+    private static func renderBody(_ markdown: String) -> String {
+        return fallbackRenderBody(markdown)
+    }
+    #endif
+
+    // MARK: - Mermaid extraction
+
+    private struct MermaidExtractResult {
+        let text: String
+        let blocks: [String]
     }
 
-    private static func processMermaidBlocks(in text: String) -> String {
-        let nsText = text as NSString
-        let matches = mermaidBlockRegex.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
-
-        var result = ""
+    private static func extractMermaidBlocks(_ markdown: String) -> MermaidExtractResult {
+        var text = ""
+        var blocks: [String] = []
         var lastEnd = 0
+        let nsText = markdown as NSString
 
-        for match in matches {
-            let fullRange = match.range(at: 0)
-            let contentRange = match.range(at: 1)
+        let pattern = try! NSRegularExpression(
+            pattern: #"```mermaid\s*\n([\s\S]*?)```"#,
+            options: .caseInsensitive
+        )
 
-            result += nsText.substring(with: NSRange(location: lastEnd, length: fullRange.location - lastEnd))
+        for match in pattern.matches(in: markdown, range: NSRange(location: 0, length: nsText.length)) {
+            let full = match.range(at: 0)
+            let content = match.range(at: 1)
 
-            let mermaidContent = nsText.substring(with: contentRange)
-            let escaped = mermaidContent
-                .replacingOccurrences(of: "&", with: "&amp;")
-                .replacingOccurrences(of: "<", with: "&lt;")
-                .replacingOccurrences(of: ">", with: "&gt;")
-            result += "<div class=\"mermaid\">\n\(escaped)\n</div>"
-
-            lastEnd = fullRange.location + fullRange.length
+            text += nsText.substring(with: NSRange(location: lastEnd, length: full.location - lastEnd))
+            text += "%%MERMAID_\(blocks.count)%%"
+            blocks.append(nsText.substring(with: content))
+            lastEnd = full.location + full.length
         }
 
         if lastEnd < nsText.length {
-            result += nsText.substring(with: NSRange(location: lastEnd, length: nsText.length - lastEnd))
+            text += nsText.substring(with: NSRange(location: lastEnd, length: nsText.length - lastEnd))
         }
 
-        return result
+        return MermaidExtractResult(text: text, blocks: blocks)
     }
 
-    private static func renderMarkdownToHTML(_ text: String) -> String {
+    private static func reinsertMermaidBlocks(_ html: String, _ result: MermaidExtractResult) -> String {
+        var out = html
+        for (i, block) in result.blocks.enumerated() {
+            let escaped = escapeHTML(block)
+            let div = "<div class=\"mermaid\">\n\(escaped)\n</div>"
+            out = out.replacingOccurrences(of: "%%MERMAID_\(i)%%", with: div)
+        }
+        return out
+    }
+
+    private static func mermaidHTML() -> String {
+        var js = ""
+        if let path = Bundle.main.path(forResource: "mermaid.min", ofType: "js"),
+           let content = try? String(contentsOfFile: path) {
+            js = content
+        }
+        return """
+        <script>\(js)</script>
+        <script>
+        setTimeout(function() {
+            if (typeof mermaid !== 'undefined') {
+                mermaid.run({ querySelector: '.mermaid' });
+            }
+        }, 10);
+        </script>
+        """
+    }
+
+    /// Fallback parser when cmark-gfm is unavailable. Wraps lines in <p> tags
+    /// and escapes HTML. Kept minimal to avoid the old regex performance issues.
+    private static func fallbackRenderBody(_ markdown: String) -> String {
         var html = ""
         var inCodeBlock = false
-        var codeBlockContent = ""
-        var codeBlockLang = ""
+        var codeLang = ""
 
-        for line in text.components(separatedBy: "\n") {
+        markdown.enumerateSubstrings(in: markdown.startIndex..., options: .byLines) { line, _, _, _ in
+            guard let line else { return }
             if line.hasPrefix("```") && !inCodeBlock {
                 inCodeBlock = true
-                codeBlockLang = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-                codeBlockContent = ""
-                continue
+                codeLang = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                html += "<pre><code class=\"language-\(escapeHTML(codeLang))\">"
+                return
             }
-
             if line.hasPrefix("```") && inCodeBlock {
                 inCodeBlock = false
-                let langClass = codeBlockLang.isEmpty ? "" : " class=\"language-\(escapeHTML(codeBlockLang))\""
-                html += "<pre><code\(langClass)>\(escapeHTML(codeBlockContent))\n</code></pre>\n"
-                continue
+                html += "</code></pre>\n"
+                return
             }
-
             if inCodeBlock {
-                if !codeBlockContent.isEmpty { codeBlockContent += "\n" }
-                codeBlockContent += line
-                continue
+                html += escapeHTML(line) + "\n"
+                return
             }
-
-            html += renderLine(line) + "\n"
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                html += "<br>\n"
+                return
+            }
+            html += "<p>\(escapeHTML(line))</p>\n"
         }
-
         if inCodeBlock {
-            html += "<pre><code>\(escapeHTML(codeBlockContent))\n</code></pre>\n"
+            html += "</code></pre>\n"
         }
-
         return html
     }
 
-    private static func renderLine(_ line: String) -> String {
-        if let match = headerRegex.firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)) {
-            let level = line[Range(match.range(at: 1), in: line)!].count
-            let text = String(line[Range(match.range(at: 2), in: line)!])
-            let id = text.lowercased()
-                .replacingOccurrences(of: #"[^\w\s-]"#, with: "", options: .regularExpression)
-                .replacingOccurrences(of: #"\s+"#, with: "-", options: .regularExpression)
-            return "<h\(level) id=\"\(id)\">\(inlineFormatting(text))</h\(level)>"
-        }
-
-        if line.hasPrefix("> ") {
-            let content = String(line.dropFirst(2))
-            return "<blockquote><p>\(inlineFormatting(content))</p></blockquote>"
-        }
-
-        if let match = ulRegex.firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)) {
-            let content = String(line[Range(match.range(at: 1), in: line)!])
-            return "<ul>\n<li>\(inlineFormatting(content))</li>\n</ul>"
-        }
-
-        if let match = olRegex.firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)) {
-            let content = String(line[Range(match.range(at: 2), in: line)!])
-            return "<ol>\n<li>\(inlineFormatting(content))</li>\n</ol>"
-        }
-
-        if line.hasPrefix("---") || line.hasPrefix("***") || line.hasPrefix("___") {
-            return "<hr>"
-        }
-
-        if line.trimmingCharacters(in: .whitespaces).isEmpty {
-            return ""
-        }
-
-        if line.hasPrefix("|") && line.hasSuffix("|") {
-            return renderTable(line)
-        }
-
-        return "<p>\(inlineFormatting(line))</p>"
-    }
-
-    private static func renderTable(_ firstLine: String) -> String {
-        return "<p>\(inlineFormatting(firstLine))</p>"
-    }
-
-    private static func inlineFormatting(_ text: String) -> String {
-        // Fast path: lines without markdown syntax chars just get HTML-escaped.
-        // For 1.1MB of markdown this skips ~70,000 unnecessary regex calls.
-        let hasMarkdownChars = text.contains(where: { char in
-            char == "*" || char == "_" || char == "`" || char == "[" || char == "!" || char == "~"
-        })
-        if !hasMarkdownChars || text.utf16.count >= 500 {
-            return escapeHTML(text)
-        }
-
-        var result = text
-
-        // Images ![alt](url) — replace base64 data URIs with a placeholder
-        if imgRegex.firstMatch(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count)) != nil {
-            let nsResult = result as NSString
-            let matches = imgRegex.matches(in: result, options: [], range: NSRange(location: 0, length: nsResult.length))
-            var offset = 0
-            for match in matches {
-                let urlRange = match.range(at: 2)
-                let url = nsResult.substring(with: urlRange)
-                if url.hasPrefix("data:") || url.count > 2000 {
-                    let alt = nsResult.substring(with: match.range(at: 1))
-                    let placeholder = "<div style=\"padding:16px;background:rgba(128,128,128,0.08);border-radius:8px;text-align:center;color:var(--blockquote-color);font-size:13px;margin:12px 0;\">🖼️ \(escapeHTML(alt))<br><span style=\"font-size:11px;\">(base64 image — not displayed in preview)</span></div>"
-                    result = (result as NSString).replacingCharacters(in: NSRange(location: match.range.location + offset, length: match.range.length), with: placeholder)
-                    offset += placeholder.utf16.count - match.range.length
-                } else {
-                    let imgTag = "<img src=\"\(escapeHTML(url))\" alt=\"\(escapeHTML(nsResult.substring(with: match.range(at: 1))))\" loading=\"lazy\">"
-                    result = (result as NSString).replacingCharacters(in: NSRange(location: match.range.location + offset, length: match.range.length), with: imgTag)
-                    offset += imgTag.utf16.count - match.range.length
-                }
-            }
-        }
-
-        // Bold **text** or __text__
-        result = boldRegex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<strong>$2</strong>")
-
-        // Italic *text* or _text_
-        result = italicRegex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<em>$1</em>")
-
-        // Inline code `text`
-        result = codeRegex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<code>$1</code>")
-
-        // Links [text](url)
-        result = linkRegex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<a href=\"$2\">$1</a>")
-
-        // Strikethrough ~~text~~
-        result = strikeRegex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<del>$1</del>")
-
-        return result
-    }
+    // MARK: - Helpers
 
     private static func escapeHTML(_ text: String) -> String {
         text
@@ -214,6 +181,8 @@ enum MarkdownParser {
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
     }
+
+    // MARK: - Preview CSS
 
     static let previewCSS: String = {
         """
@@ -321,6 +290,34 @@ enum MarkdownParser {
             background: transparent;
         }
         .mermaid svg { max-width: 100%; }
+
+        /* highlight.js theme — GitHub-inspired light/dark */
+        .hljs-keyword, .hljs-selector-tag, .hljs-type { color: #d73a49; }
+        .hljs-string { color: #032f62; }
+        .hljs-comment, .hljs-quote { color: #6a737d; font-style: italic; }
+        .hljs-number, .hljs-literal { color: #005cc5; }
+        .hljs-title, .hljs-section { color: #6f42c1; }
+        .hljs-built_in, .hljs-builtin-name { color: #005cc5; }
+        .hljs-attr { color: #005cc5; }
+        .hljs-params { color: #24292e; }
+        .hljs-meta { color: #e36209; }
+        .hljs-name { color: #22863a; }
+        .hljs-tag { color: #22863a; }
+        .hljs-regexp { color: #032f62; }
+        @media (prefers-color-scheme: dark) {
+            .hljs-keyword, .hljs-selector-tag, .hljs-type { color: #ff7b72; }
+            .hljs-string { color: #a5d6ff; }
+            .hljs-comment, .hljs-quote { color: #8b949e; }
+            .hljs-number, .hljs-literal { color: #79c0ff; }
+            .hljs-title, .hljs-section { color: #d2a8ff; }
+            .hljs-built_in, .hljs-builtin-name { color: #79c0ff; }
+            .hljs-attr { color: #79c0ff; }
+            .hljs-params { color: #e6edf3; }
+            .hljs-meta { color: #ffa657; }
+            .hljs-name { color: #7ee787; }
+            .hljs-tag { color: #7ee787; }
+            .hljs-regexp { color: #a5d6ff; }
+        }
         """
     }()
 }

@@ -20,6 +20,13 @@ extension FocusedValues {
 struct MarkdownEditorApp: App {
     @Environment(\.openWindow) private var openWindow
 
+    init() {
+        // Pre-warm WKWebView process on app launch to reduce first-preview latency
+        DispatchQueue.main.async {
+            WebViewPool.shared.preWarm()
+        }
+    }
+
     var body: some Scene {
         WindowGroup(id: "Main") {
             ContentView()

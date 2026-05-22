@@ -4,11 +4,36 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="MarkdownEditor"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
+
+# cmark-gfm library (Homebrew). Gracefully degrade if not present.
+CMARK_PREFIX="$(brew --prefix cmark-gfm 2>/dev/null || echo "")"
+if [ -n "$CMARK_PREFIX" ] && [ -f "$CMARK_PREFIX/include/cmark-gfm.h" ]; then
+  CMARK_INCLUDE="$CMARK_PREFIX/include"
+  CMARK_LIB="$CMARK_PREFIX/lib"
+  CMARK_LINK="-lcmark-gfm -lcmark-gfm-extensions"
+  echo "==> Using cmark-gfm from $CMARK_PREFIX"
+else
+  CMARK_INCLUDE=""
+  CMARK_LIB=""
+  CMARK_LINK=""
+  echo "==> cmark-gfm not found; falling back to built-in parser"
+fi
+
 SWIFTC_FLAGS=(
   -target "arm64-apple-macosx14.0"
   -sdk "$(xcrun --show-sdk-path)"
   -parse-as-library
+  -O
 )
+[ -n "$CMARK_INCLUDE" ] && SWIFTC_FLAGS+=(-I "$CMARK_INCLUDE" -Xcc -I"$CMARK_INCLUDE")
+[ -n "$CMARK_LIB" ] && SWIFTC_FLAGS+=(-L "$CMARK_LIB" -Xlinker -rpath -Xlinker "@executable_path/../Frameworks")
+[ -n "$CMARK_LINK" ] && SWIFTC_FLAGS+=($CMARK_LINK)
+
+# Module map for cmark-gfm C interop (only needed when cmark is available)
+if [ -n "$CMARK_INCLUDE" ]; then
+  MODULE_DIR="$PROJECT_DIR/Sources/CCmarkGfm"
+  SWIFTC_FLAGS+=(-I "$MODULE_DIR")
+fi
 
 echo "==> Building $APP_NAME.app ..."
 
@@ -20,6 +45,16 @@ if [ ! -f "$MERMAID" ]; then
   echo "    Downloaded: $(wc -c < "$MERMAID") bytes"
 else
   echo "==> mermaid.min.js already present, skipping download"
+fi
+
+# 1b. Download highlight.min.js if missing
+HLJS="$PROJECT_DIR/Resources/highlight.min.js"
+if [ ! -f "$HLJS" ]; then
+  echo "==> Downloading highlight.min.js ..."
+  curl -sL "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" -o "$HLJS" || true
+  [ -f "$HLJS" ] && echo "    Downloaded: $(wc -c < "$HLJS") bytes" || echo "    (download failed — preview will skip syntax highlighting)"
+else
+  echo "==> highlight.min.js already present, skipping download"
 fi
 
 # 2. Create .app bundle structure
@@ -91,6 +126,7 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Views/ContentView.swift"
   "$PROJECT_DIR/Sources/Views/Editor/EditorContainerView.swift"
   "$PROJECT_DIR/Sources/Views/Editor/LineNumberRulerView.swift"
+  "$PROJECT_DIR/Sources/Views/Editor/MarkdownTextStorage.swift"
   "$PROJECT_DIR/Sources/Views/Editor/MarkdownTextView.swift"
   "$PROJECT_DIR/Sources/Views/Preview/PreviewWebView.swift"
   "$PROJECT_DIR/Sources/Views/Sidebar/FileRowView.swift"
@@ -106,6 +142,22 @@ swiftc "${SWIFTC_FLAGS[@]}" \
 echo "==> Copying resources ..."
 cp "$PROJECT_DIR/$APP_NAME.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 cp "$MERMAID" "$APP_BUNDLE/Contents/Resources/mermaid.min.js"
+[ -f "$HLJS" ] && cp "$HLJS" "$APP_BUNDLE/Contents/Resources/highlight.min.js" || true
+
+# Copy cmark-gfm dylibs into bundle for portable distribution
+if [ -n "$CMARK_LIB" ]; then
+  CMAJOR_DYLIB=$(ls "$CMARK_LIB"/libcmark-gfm.*.dylib 2>/dev/null | head -1)
+  CME_DYLIB=$(ls "$CMARK_LIB"/libcmark-gfm-extensions.*.dylib 2>/dev/null | head -1)
+  CMAJOR_NAME=$(basename "$CMAJOR_DYLIB" 2>/dev/null || echo "")
+  CME_NAME=$(basename "$CME_DYLIB" 2>/dev/null || echo "")
+  if [ -n "$CMAJOR_NAME" ]; then
+    mkdir -p "$APP_BUNDLE/Contents/Frameworks"
+    cp "$CMAJOR_DYLIB" "$APP_BUNDLE/Contents/Frameworks/"
+    cp "$CME_DYLIB" "$APP_BUNDLE/Contents/Frameworks/"
+    install_name_tool -change "@rpath/$CMAJOR_NAME" "@executable_path/../Frameworks/$CMAJOR_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+    install_name_tool -change "@rpath/$CME_NAME" "@executable_path/../Frameworks/$CME_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+  fi
+fi
 
 # 6. Ad-hoc code sign
 echo "==> Code signing ..."
