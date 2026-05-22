@@ -2,6 +2,12 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+// MARK: - Image Attachment for inline base64 display
+
+final class MarkdownImageAttachment: NSTextAttachment {
+    var markdownSource: String = ""
+}
+
 // MARK: - NSTextView subclass with image drop/paste
 
 final class ImageDropTextView: NSTextView {
@@ -94,7 +100,7 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.isHorizontallyResizable = true
         textView.autoresizingMask = [.width, .height]
         textView.allowsUndo = true
-        textView.isRichText = false
+        textView.isRichText = true
         textView.usesFontPanel = false
         textView.textColor = NSColor.textColor
         textView.backgroundColor = NSColor.controlBackgroundColor
@@ -165,13 +171,29 @@ struct MarkdownTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
-        if textView.string != text {
+        // Restore any image attachments to markdown before comparing text.
+        // Otherwise textView.string (with attachment placeholder chars) will
+        // never match the binding's clean markdown, causing attachment loss
+        // every time SwiftUI re-renders the view.
+        context.coordinator.suppressTextDidChange = true
+        if let storage = textView.textStorage {
+            context.coordinator.restoreBase64AttachmentsToMarkdown(in: storage)
+        }
+        let currentRaw = textView.string
+        context.coordinator.suppressTextDidChange = false
+
+        if currentRaw != text {
             context.coordinator.suppressTextDidChange = true
             let selectedRange = textView.selectedRange()
             textView.string = text
             let safeLocation = min(selectedRange.location, (text as NSString).length)
             textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
             context.coordinator.suppressTextDidChange = false
+            context.coordinator.scheduleBase64Processing()
+        } else {
+            // Text matches — just make sure base64 images are rendered
+            // (may have been cleared by a previous updateNSView pass)
+            context.coordinator.scheduleBase64Processing()
         }
     }
 
@@ -184,6 +206,13 @@ struct MarkdownTextView: NSViewRepresentable {
         var scrollObserver: Any?
         var textChangeObserver: Any?
 
+        private static let base64ImageRegex: NSRegularExpression = {
+            try! NSRegularExpression(
+                pattern: #"!\[([^\]]*)\]\(data:image\/[^;]+;base64,([^)\s]+)\)"#,
+                options: []
+            )
+        }()
+
         init(_ parent: MarkdownTextView) {
             self.parent = parent
         }
@@ -193,11 +222,104 @@ struct MarkdownTextView: NSViewRepresentable {
             if let obs = textChangeObserver { NotificationCenter.default.removeObserver(obs) }
         }
 
+        // MARK: - NSTextViewDelegate
+
         func textDidChange(_ notification: Notification) {
             guard !suppressTextDidChange,
                   let textView = notification.object as? NSTextView else { return }
+
+            // Restore any image attachments back to markdown source so
+            // the SwiftUI binding receives clean text (not attachment placeholder chars)
+            if let storage = textView.textStorage {
+                suppressTextDidChange = true
+                restoreBase64AttachmentsToMarkdown(in: storage)
+                suppressTextDidChange = false
+            }
+
             DispatchQueue.main.async {
                 self.parent.text = textView.string
+            }
+
+            scheduleBase64Processing()
+        }
+
+        // MARK: - Base64 Image Processing
+
+        func scheduleBase64Processing() {
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(processBase64Images), object: nil)
+            perform(#selector(processBase64Images), with: nil, afterDelay: 0.2)
+        }
+
+        func restoreBase64AttachmentsToMarkdown(in textStorage: NSTextStorage) {
+            let fullRange = NSRange(location: 0, length: textStorage.length)
+            textStorage.enumerateAttribute(.attachment, in: fullRange, options: .reverse) { value, range, _ in
+                if let attachment = value as? MarkdownImageAttachment, !attachment.markdownSource.isEmpty {
+                    textStorage.replaceCharacters(in: range, with: attachment.markdownSource)
+                }
+            }
+        }
+
+        @objc private func processBase64Images() {
+            guard let textView = textView,
+                  let textStorage = textView.textStorage else { return }
+
+            let text = textStorage.string
+            let nsString = text as NSString
+            let fullRange = NSRange(location: 0, length: nsString.length)
+
+            let matches = Self.base64ImageRegex.matches(in: text, options: [], range: fullRange)
+            guard !matches.isEmpty else { return }
+
+            suppressTextDidChange = true
+            defer {
+                DispatchQueue.main.async {
+                    self.suppressTextDidChange = false
+                }
+            }
+
+            for match in matches.reversed() {
+                let fullMatchRange = match.range(at: 0)
+                let base64Range = match.range(at: 2)
+
+                guard fullMatchRange.location != NSNotFound,
+                      base64Range.location != NSNotFound,
+                      base64Range.length > 0 else { continue }
+
+                let base64String = nsString.substring(with: base64Range)
+                guard let imageData = Data(base64Encoded: base64String, options: .ignoreUnknownCharacters),
+                      let image = NSImage(data: imageData) else { continue }
+
+                let attachment = MarkdownImageAttachment()
+                attachment.markdownSource = nsString.substring(with: fullMatchRange)
+
+                let maxWidth: CGFloat = 400
+                let maxHeight: CGFloat = 300
+                var size = image.size
+                if size.width > maxWidth || size.height > maxHeight {
+                    let scale = min(maxWidth / size.width, maxHeight / size.height)
+                    size = NSSize(width: size.width * scale, height: size.height * scale)
+                }
+                if size.width < 20 { size.width = 20 }
+                if size.height < 20 { size.height = 20 }
+
+                let displayImage = NSImage(size: size)
+                displayImage.lockFocus()
+                image.draw(in: NSRect(origin: .zero, size: size),
+                           from: NSRect(origin: .zero, size: image.size),
+                           operation: .copy, fraction: 1.0)
+                displayImage.unlockFocus()
+
+                attachment.image = displayImage
+                attachment.bounds = NSRect(x: 0, y: 0, width: size.width, height: size.height)
+
+                let attrString = NSAttributedString(attachment: attachment)
+                textStorage.replaceCharacters(in: fullMatchRange, with: attrString)
+            }
+
+            // Invalidate layout so attachments appear
+            let updatedRange = NSRange(location: 0, length: textStorage.length)
+            for layoutManager in textStorage.layoutManagers {
+                layoutManager.invalidateLayout(forCharacterRange: updatedRange, actualCharacterRange: nil)
             }
         }
 
@@ -256,10 +378,13 @@ struct MarkdownTextView: NSViewRepresentable {
             let newText = (updated as NSString).replacingCharacters(in: NSRange(location: cursor, length: 0), with: insertion)
             let insertEnd = cursor + (insertion as NSString).length
 
+            suppressTextDidChange = true
             textView.string = newText
             textView.setSelectedRange(NSRange(location: insertEnd, length: 0))
+            suppressTextDidChange = false
             DispatchQueue.main.async {
                 self.parent.text = newText
+                self.scheduleBase64Processing()
             }
         }
 

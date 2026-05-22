@@ -11,7 +11,10 @@ struct ContentView: View {
             EditorContainerView()
                 .frame(minWidth: 200)
         } detail: {
-            PreviewWebView()
+            PreviewWebView(
+                html: appState.renderedHTML,
+                hasFile: appState.currentFileURL != nil
+            )
                 .frame(minWidth: 150)
         }
         .navigationSplitViewStyle(.prominentDetail)

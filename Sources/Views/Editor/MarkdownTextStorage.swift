@@ -32,17 +32,15 @@ final class MarkdownTextStorage: NSTextStorage {
     }
 
     @objc private func applyHighlighting() {
-        // Only reset foreground color — do NOT override .font on the full text range.
-        // Forcing .font explicitly on every character breaks NSTextView's native
-        // font cascading for CJK/Unicode glyphs (Chinese, Japanese, Korean, emoji).
-        // NSTextView.font already provides the correct default font for all scripts.
-        backingStore.addAttribute(.foregroundColor, value: NSColor.textColor,
-                                  range: NSRange(location: 0, length: backingStore.length))
+        // Remove all explicit foregroundColor so NSTextView's typingAttributes
+        // (which properly handle CJK font cascading) provide the default.
+        // Then re-apply pattern-specific colors only where syntax is detected.
+        backingStore.removeAttribute(.foregroundColor,
+                                     range: NSRange(location: 0, length: backingStore.length))
 
         let text = backingStore.string as NSString
         let length = text.length
 
-        // Skip highlighting for huge documents (> 200KB)
         guard length < 200_000 else { return }
 
         highlightHeaders(in: text, length: length)
@@ -50,23 +48,34 @@ final class MarkdownTextStorage: NSTextStorage {
         highlightCodeBlocks(in: text, length: length)
         highlightInlinePatterns(in: text, length: length)
 
-        // Invalidate layout so the text view re-renders with updated attributes
         let fullRange = NSRange(location: 0, length: backingStore.length)
         for layoutManager in layoutManagers {
             layoutManager.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
         }
     }
 
+    // MARK: - Semantic highlight colors
+
+    private enum HighlightColors {
+        static let header   = NSColor(red: 0.00, green: 0.48, blue: 1.00, alpha: 1) // #007AFF blue
+        static let quote    = NSColor(red: 0.50, green: 0.55, blue: 0.60, alpha: 1) // gray
+        static let code     = NSColor(red: 0.00, green: 0.62, blue: 0.35, alpha: 1) // #009E59 green
+        static let link     = NSColor(red: 0.65, green: 0.35, blue: 0.85, alpha: 1) // #A659D9 purple
+        static let image    = NSColor(red: 0.90, green: 0.30, blue: 0.55, alpha: 1) // #E64D8C magenta
+        static let bold     = NSColor(red: 1.00, green: 0.45, blue: 0.00, alpha: 1) // #FF7300 orange
+        static let strike   = NSColor(red: 0.60, green: 0.60, blue: 0.65, alpha: 1) // subdued
+    }
+
     // MARK: - Headers
 
     private func highlightHeaders(in text: NSString, length: Int) {
-        let pattern = #"^(#{1,6})\s+(.+)$"#
+        // Only color the # prefix — leave the heading text (which may contain
+        // CJK/Unicode) with its default NSTextView attributes intact.
+        let pattern = #"^(#{1,6})(?=\s)"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .anchorsMatchLines) else { return }
-        let boldFont = NSFont.systemFont(ofSize: 13, weight: .bold)
 
         for match in regex.matches(in: text as String, range: NSRange(location: 0, length: length)) {
-            backingStore.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: match.range)
-            backingStore.addAttribute(.font, value: boldFont, range: match.range)
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.header, range: match.range)
         }
     }
 
@@ -76,7 +85,7 @@ final class MarkdownTextStorage: NSTextStorage {
         let pattern = #"^>\s.*$"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .anchorsMatchLines) else { return }
         for match in regex.matches(in: text as String, range: NSRange(location: 0, length: length)) {
-            backingStore.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: match.range)
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.quote, range: match.range)
         }
     }
 
@@ -86,7 +95,7 @@ final class MarkdownTextStorage: NSTextStorage {
         let pattern = #"```[\s\S]*?```"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
         for match in regex.matches(in: text as String, range: NSRange(location: 0, length: length)) {
-            backingStore.addAttribute(.foregroundColor, value: NSColor.systemGreen, range: match.range)
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.code, range: match.range)
         }
     }
 
@@ -94,10 +103,11 @@ final class MarkdownTextStorage: NSTextStorage {
 
     private func highlightInlinePatterns(in text: NSString, length: Int) {
         let patterns: [(String, [NSAttributedString.Key: Any])] = [
-            (#"`([^`]+)`"#, [.foregroundColor: NSColor.systemGreen]),
-            (#"!\[([^\]]*)\]\(([^)]+)\)"#, [.foregroundColor: NSColor.systemPurple]),
-            (#"\[([^\]]+)\]\(([^)]+)\)"#, [.foregroundColor: NSColor.systemBlue]),
-            (#"~~(.+?)~~"#, [.foregroundColor: NSColor.tertiaryLabelColor, .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
+            (#"`([^`]+)`"#, [.foregroundColor: HighlightColors.code]),
+            (#"!\[([^\]]*)\]\(([^)]+)\)"#, [.foregroundColor: HighlightColors.image]),
+            (#"\[([^\]]+)\]\(([^)]+)\)"#, [.foregroundColor: HighlightColors.link]),
+            (#"~~(.+?)~~"#, [.foregroundColor: HighlightColors.strike,
+                            .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
         ]
 
         for (pattern, attrs) in patterns {
@@ -112,8 +122,8 @@ final class MarkdownTextStorage: NSTextStorage {
 
         let boldPattern = #"(\*\*|__)(.+?)\1"#
         let italicPattern = #"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)"#
-        highlightInlineOnShortLines(pattern: boldPattern, attrs: [.font: NSFont.systemFont(ofSize: 14, weight: .bold)])
-        highlightInlineOnShortLines(pattern: italicPattern, attrs: [.font: NSFontManager.shared.convert(NSFont.systemFont(ofSize: 14, weight: .regular), toHaveTrait: .italicFontMask)])
+        highlightInlineOnShortLines(pattern: boldPattern, attrs: [.foregroundColor: HighlightColors.bold])
+        highlightInlineOnShortLines(pattern: italicPattern, attrs: [.foregroundColor: HighlightColors.bold])
     }
 
     private func highlightInlineOnShortLines(pattern: String, attrs: [NSAttributedString.Key: Any]) {

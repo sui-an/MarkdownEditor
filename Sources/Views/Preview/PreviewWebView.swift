@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 import AppKit
 
-// MARK: - Shared WebView pool for pre-warming
+// MARK: - Shared WebView pool
 
 final class WebViewPool {
     static let shared = WebViewPool()
@@ -21,7 +21,6 @@ final class WebViewPool {
         guard let webView else { return }
         webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
         webView.navigationDelegate = nil
-
         preWarmedView?.loadHTMLString("<html><body></body></html>", baseURL: nil)
         preWarmedView = webView
     }
@@ -45,25 +44,32 @@ final class WebViewPool {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
 
-        for subview in webView.subviews {
-            if let scrollView = subview as? NSScrollView {
-                scrollView.scrollerStyle = .overlay
-                break
-            }
-        }
+        findScrollView(in: webView)?.scrollerStyle = .overlay
 
         return webView
     }
 
-    func handleMemoryPressure() {
-        preWarmedView = nil
+    func handleMemoryPressure() { preWarmedView = nil }
+}
+
+private func findScrollView(in view: NSView) -> NSScrollView? {
+    if let sv = view as? NSScrollView { return sv }
+    for sub in view.subviews {
+        if let found = findScrollView(in: sub) { return found }
     }
+    return nil
 }
 
 // MARK: - PreviewWebView
 
 struct PreviewWebView: NSViewRepresentable {
-    @Environment(AppState.self) private var appState
+    /// The full HTML document to display. Passed as a direct parameter so that
+    /// SwiftUI reliably calls updateNSView on every change (unlike @Environment
+    /// which may miss property-level updates in NSViewRepresentable).
+    let html: String
+
+    /// When false, the preview shows a blank page.
+    let hasFile: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -76,14 +82,16 @@ struct PreviewWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        if appState.currentFileURL == nil {
+        // Ensure overlay scrollbars persist across pool reuse
+        findScrollView(in: webView)?.scrollerStyle = .overlay
+
+        guard hasFile else {
             if context.coordinator.lastLoadedHTML != "" {
                 context.coordinator.lastLoadedHTML = ""
                 webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
             }
             return
         }
-        let html = appState.renderedHTML
         guard html != context.coordinator.lastLoadedHTML else { return }
         context.coordinator.lastLoadedHTML = html
         webView.loadHTMLString(html, baseURL: nil)

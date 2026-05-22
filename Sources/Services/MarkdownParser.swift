@@ -19,7 +19,9 @@ enum MarkdownParser {
 
     /// Parse markdown to full HTML document. Thread-safe.
     static func parseToHTML(_ markdown: String) -> String {
+        #if canImport(CCmarkGfm)
         ensureGFMExtensions()
+        #endif
 
         let mermaidResult = extractMermaidBlocks(markdown)
         let bodyHTML = renderBody(mermaidResult.text)
@@ -41,7 +43,9 @@ enum MarkdownParser {
     /// Parse markdown to HTML body fragment only (no wrapper, no CSS).
     /// Used for caching the expensive cmark part.
     static func parseToHTMLBody(_ markdown: String) -> String {
+        #if canImport(CCmarkGfm)
         ensureGFMExtensions()
+        #endif
 
         let mermaidResult = extractMermaidBlocks(markdown)
         let bodyHTML = renderBody(mermaidResult.text)
@@ -52,14 +56,29 @@ enum MarkdownParser {
 
     #if canImport(CCmarkGfm)
     private static func renderBody(_ markdown: String) -> String {
-        guard let cstr = markdown.cString(using: .utf8) else { return "" }
+        guard let cstr = markdown.cString(using: .utf8) else { return fallbackRenderBody(markdown) }
         let len = strlen(cstr)
         let options = CMARK_OPT_DEFAULT
 
-        guard let doc = cmark_parse_document(cstr, len, options) else {
+        guard let parser = cmark_parser_new(options) else {
+            return fallbackRenderBody(markdown)
+        }
+
+        // Attach GFM extensions registered by ensureGFMExtensions()
+        for name in ["table", "strikethrough", "tasklist", "autolink"] {
+            if let ext = cmark_find_syntax_extension(name) {
+                cmark_parser_attach_syntax_extension(parser, ext)
+            }
+        }
+
+        cmark_parser_feed(parser, cstr, len)
+
+        guard let doc = cmark_parser_finish(parser) else {
+            cmark_parser_free(parser)
             return fallbackRenderBody(markdown)
         }
         defer { cmark_node_free(doc) }
+        cmark_parser_free(parser)
 
         guard let htmlCStr = cmark_render_html(doc, options, nil) else {
             return fallbackRenderBody(markdown)
@@ -112,8 +131,9 @@ enum MarkdownParser {
     private static func reinsertMermaidBlocks(_ html: String, _ result: MermaidExtractResult) -> String {
         var out = html
         for (i, block) in result.blocks.enumerated() {
-            let escaped = escapeHTML(block)
-            let div = "<div class=\"mermaid\">\n\(escaped)\n</div>"
+            // Do NOT HTML-escape mermaid content — angle brackets are valid
+            // diagram syntax (e.g. A-->B, A-->|text|B).
+            let div = "<div class=\"mermaid\">\n\(block)\n</div>"
             out = out.replacingOccurrences(of: "%%MERMAID_\(i)%%", with: div)
         }
         return out
