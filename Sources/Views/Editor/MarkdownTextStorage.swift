@@ -32,7 +32,7 @@ final class MarkdownTextStorage: NSTextStorage {
     }
 
     @objc private func applyHighlighting() {
-        let baseFont = NSFont.systemFont(ofSize: 14)
+        let baseFont = NSFont.systemFont(ofSize: 13)
         let baseAttrs: [NSAttributedString.Key: Any] = [
             .font: baseFont,
             .foregroundColor: NSColor.textColor
@@ -43,6 +43,12 @@ final class MarkdownTextStorage: NSTextStorage {
 
         let text = backingStore.string as NSString
         let length = text.length
+
+        // Skip highlighting for huge documents (> 200KB) to avoid beachball
+        guard length < 200_000 else {
+            endEditing()
+            return
+        }
 
         // Headers (must run first — whole-line styling)
         highlightHeaders(in: text, length: length)
@@ -101,29 +107,51 @@ final class MarkdownTextStorage: NSTextStorage {
 
     private func highlightInlinePatterns(in text: NSString, length: Int) {
         let patterns: [(String, [NSAttributedString.Key: Any])] = [
-            // Bold **text** or __text__
-            (#"(\*\*|__)(.+?)\1"#, [.font: NSFont.systemFont(ofSize: 13, weight: .bold)]),
-            // Inline code `text`
             (#"`([^`]+)`"#, [.foregroundColor: NSColor.systemGreen]),
-            // Images ![alt](url)
             (#"!\[([^\]]*)\]\(([^)]+)\)"#, [.foregroundColor: NSColor.systemPurple]),
-            // Links [text](url)
             (#"\[([^\]]+)\]\(([^)]+)\)"#, [.foregroundColor: NSColor.systemBlue]),
-            // Strikethrough ~~text~~
             (#"~~(.+?)~~"#, [.foregroundColor: NSColor.tertiaryLabelColor, .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
-            // Italic *text* (single asterisk, not double)
-            (#"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)"#, [.font: NSFontManager.shared.convert(NSFont.systemFont(ofSize: 13, weight: .regular), toHaveTrait: .italicFontMask)]),
         ]
 
         for (pattern, attrs) in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { continue }
             for match in regex.matches(in: text as String, options: [], range: NSRange(location: 0, length: length)) {
+                // Skip matches across extremely long spans (base64, data URIs)
+                guard match.range.length < 2000 else { continue }
                 var existing = backingStore.attributes(at: match.range.location, effectiveRange: nil)
                 for (key, value) in attrs {
                     existing[key] = value
                 }
                 backingStore.setAttributes(existing, range: match.range)
             }
+        }
+
+        // Bold/Italic — only on lines < 500 chars to avoid base64 backtracking
+        let boldPattern = #"(\*\*|__)(.+?)\1"#
+        let italicPattern = #"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)"#
+        highlightInlineOnShortLines(pattern: boldPattern, attrs: [.font: NSFont.systemFont(ofSize: 14, weight: .bold)])
+        highlightInlineOnShortLines(pattern: italicPattern, attrs: [.font: NSFontManager.shared.convert(NSFont.systemFont(ofSize: 14, weight: .regular), toHaveTrait: .italicFontMask)])
+    }
+
+    /// Apply regex only to lines shorter than 500 characters to avoid catastrophic backtracking on base64 / data URIs.
+    private func highlightInlineOnShortLines(pattern: String, attrs: [NSAttributedString.Key: Any]) {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return }
+        let text = backingStore.string as NSString
+        let length = text.length
+        var pos = 0
+        while pos < length {
+            let lineRange = text.lineRange(for: NSRange(location: pos, length: 0))
+            if lineRange.length < 500 {
+                for match in regex.matches(in: text as String, options: [], range: lineRange) {
+                    guard match.range.length < 2000 else { continue }
+                    var existing = backingStore.attributes(at: match.range.location, effectiveRange: nil)
+                    for (key, value) in attrs {
+                        existing[key] = value
+                    }
+                    backingStore.setAttributes(existing, range: match.range)
+                }
+            }
+            pos = NSMaxRange(lineRange)
         }
     }
 }

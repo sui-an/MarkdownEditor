@@ -11,6 +11,7 @@ final class AppState {
     var currentFileURL: URL?
     var renderedHTML: String = ""
     var isFileDirty: Bool = false
+    var isLoadingFile: Bool = false
 
     private var folderWatchers: [UUID: FolderWatcher] = [:]
     private var selectedFileURL: URL?
@@ -26,17 +27,29 @@ final class AppState {
             return
         }
 
-        do {
-            let content = try FileService.readFile(at: url)
-            let item = FileTreeItem(url: url, name: url.lastPathComponent, isDirectory: false, parentID: nil)
-            openFiles.append(item)
-            setCurrentFile(url: url, content: content, id: item.id)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Cannot Open File"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
+        let item = FileTreeItem(url: url, name: url.lastPathComponent, isDirectory: false, parentID: nil)
+        openFiles.append(item)
+        isLoadingFile = true
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            do {
+                let content = try FileService.readFile(at: url)
+                DispatchQueue.main.async {
+                    self.isLoadingFile = false
+                    self.setCurrentFile(url: url, content: content, id: item.id)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isLoadingFile = false
+                    self.openFiles.removeAll { $0.id == item.id }
+                    let alert = NSAlert()
+                    alert.messageText = "Cannot Open File"
+                    alert.informativeText = error.localizedDescription
+                    alert.alertStyle = .warning
+                    alert.runModal()
+                }
+            }
         }
     }
 
@@ -60,6 +73,16 @@ final class AppState {
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .warning
             alert.runModal()
+        }
+    }
+
+    // MARK: - Close File
+
+    func closeFile(id: UUID) {
+        saveCurrentFileIfDirty()
+        openFiles.removeAll { $0.id == id }
+        if selectedFileID == id {
+            clearSelection()
         }
     }
 
@@ -91,15 +114,26 @@ final class AppState {
         let allItems = allAvailableFiles()
         guard let item = allItems.first(where: { $0.id == id }) else { return }
 
-        do {
-            let content = try FileService.readFile(at: item.url)
-            setCurrentFile(url: item.url, content: content, id: item.id)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Cannot Open File"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
+        isLoadingFile = true
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            do {
+                let content = try FileService.readFile(at: item.url)
+                DispatchQueue.main.async {
+                    self.isLoadingFile = false
+                    self.setCurrentFile(url: item.url, content: content, id: item.id)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isLoadingFile = false
+                    let alert = NSAlert()
+                    alert.messageText = "Cannot Open File"
+                    alert.informativeText = error.localizedDescription
+                    alert.alertStyle = .warning
+                    alert.runModal()
+                }
+            }
         }
     }
 

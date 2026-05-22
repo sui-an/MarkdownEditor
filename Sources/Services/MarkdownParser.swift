@@ -2,6 +2,17 @@ import Foundation
 
 enum MarkdownParser {
 
+    private static let headerRegex = try! NSRegularExpression(pattern: #"^(#{1,6})\s+(.+)"#)
+    private static let ulRegex = try! NSRegularExpression(pattern: #"^[\s]*[-*+]\s+(.+)"#)
+    private static let olRegex = try! NSRegularExpression(pattern: #"^[\s]*(\d+)\.\s+(.+)"#)
+    private static let mermaidBlockRegex = try! NSRegularExpression(pattern: #"```mermaid\s*\n([\s\S]*?)```"#, options: [.caseInsensitive])
+    private static let imgRegex = try! NSRegularExpression(pattern: #"!\[([^\]]*)\]\(([^)]+)\)"#)
+    private static let boldRegex = try! NSRegularExpression(pattern: #"(\*\*|__)(.+?)\1"#)
+    private static let italicRegex = try! NSRegularExpression(pattern: #"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)"#)
+    private static let codeRegex = try! NSRegularExpression(pattern: #"`([^`]+)`"#)
+    private static let linkRegex = try! NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^)]+)\)"#)
+    private static let strikeRegex = try! NSRegularExpression(pattern: #"~~(.+?)~~"#)
+
     static func parseToHTML(_ markdown: String) -> String {
         let bodyHTML = convertMarkdownToHTMLBody(markdown)
         let css = Self.previewCSS
@@ -35,13 +46,8 @@ enum MarkdownParser {
     }
 
     private static func processMermaidBlocks(in text: String) -> String {
-        let pattern = #"```mermaid\s*\n([\s\S]*?)```"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return text
-        }
-
         let nsText = text as NSString
-        let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
+        let matches = mermaidBlockRegex.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
 
         var result = ""
         var lastEnd = 0
@@ -107,8 +113,7 @@ enum MarkdownParser {
     }
 
     private static func renderLine(_ line: String) -> String {
-        if let match = try? NSRegularExpression(pattern: #"^(#{1,6})\s+(.+)"#)
-            .firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)) {
+        if let match = headerRegex.firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)) {
             let level = line[Range(match.range(at: 1), in: line)!].count
             let text = String(line[Range(match.range(at: 2), in: line)!])
             let id = text.lowercased()
@@ -122,14 +127,12 @@ enum MarkdownParser {
             return "<blockquote><p>\(inlineFormatting(content))</p></blockquote>"
         }
 
-        if let match = try? NSRegularExpression(pattern: #"^[\s]*[-*+]\s+(.+)"#)
-            .firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)) {
+        if let match = ulRegex.firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)) {
             let content = String(line[Range(match.range(at: 1), in: line)!])
             return "<ul>\n<li>\(inlineFormatting(content))</li>\n</ul>"
         }
 
-        if let match = try? NSRegularExpression(pattern: #"^[\s]*(\d+)\.\s+(.+)"#)
-            .firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)) {
+        if let match = olRegex.firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)) {
             let content = String(line[Range(match.range(at: 2), in: line)!])
             return "<ol>\n<li>\(inlineFormatting(content))</li>\n</ol>"
         }
@@ -156,41 +159,46 @@ enum MarkdownParser {
     private static func inlineFormatting(_ text: String) -> String {
         var result = text
 
-        // Images ![alt](url)
-        let imgPattern = #"!\[([^\]]*)\]\(([^)]+)\)"#
-        if let regex = try? NSRegularExpression(pattern: imgPattern, options: []) {
-            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<img src=\"$2\" alt=\"$1\" loading=\"lazy\">")
+        // Skip regex on very long lines (base64 data URIs etc.) to avoid backtracking
+        guard text.utf16.count < 500 else {
+            return escapeHTML(text)
+        }
+
+        // Images ![alt](url) — replace base64 data URIs with a placeholder
+        if imgRegex.firstMatch(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count)) != nil {
+            let nsResult = result as NSString
+            let matches = imgRegex.matches(in: result, options: [], range: NSRange(location: 0, length: nsResult.length))
+            var offset = 0
+            for match in matches {
+                let urlRange = match.range(at: 2)
+                let url = nsResult.substring(with: urlRange)
+                if url.hasPrefix("data:") || url.count > 2000 {
+                    let alt = nsResult.substring(with: match.range(at: 1))
+                    let placeholder = "<div style=\"padding:16px;background:rgba(128,128,128,0.08);border-radius:8px;text-align:center;color:var(--blockquote-color);font-size:13px;margin:12px 0;\">🖼️ \(escapeHTML(alt))<br><span style=\"font-size:11px;\">(base64 image — not displayed in preview)</span></div>"
+                    result = (result as NSString).replacingCharacters(in: NSRange(location: match.range.location + offset, length: match.range.length), with: placeholder)
+                    offset += placeholder.utf16.count - match.range.length
+                } else {
+                    let imgTag = "<img src=\"\(escapeHTML(url))\" alt=\"\(escapeHTML(nsResult.substring(with: match.range(at: 1))))\" loading=\"lazy\">"
+                    result = (result as NSString).replacingCharacters(in: NSRange(location: match.range.location + offset, length: match.range.length), with: imgTag)
+                    offset += imgTag.utf16.count - match.range.length
+                }
+            }
         }
 
         // Bold **text** or __text__
-        let boldPattern = #"(\*\*|__)(.+?)\1"#
-        if let regex = try? NSRegularExpression(pattern: boldPattern, options: []) {
-            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<strong>$2</strong>")
-        }
+        result = boldRegex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<strong>$2</strong>")
 
         // Italic *text* or _text_
-        let italicPattern = #"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)"#
-        if let regex = try? NSRegularExpression(pattern: italicPattern, options: []) {
-            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<em>$1</em>")
-        }
+        result = italicRegex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<em>$1</em>")
 
         // Inline code `text`
-        let codePattern = #"`([^`]+)`"#
-        if let regex = try? NSRegularExpression(pattern: codePattern, options: []) {
-            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<code>$1</code>")
-        }
+        result = codeRegex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<code>$1</code>")
 
         // Links [text](url)
-        let linkPattern = #"\[([^\]]+)\]\(([^)]+)\)"#
-        if let regex = try? NSRegularExpression(pattern: linkPattern, options: []) {
-            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<a href=\"$2\">$1</a>")
-        }
+        result = linkRegex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<a href=\"$2\">$1</a>")
 
         // Strikethrough ~~text~~
-        let strikePattern = #"~~(.+?)~~"#
-        if let regex = try? NSRegularExpression(pattern: strikePattern, options: []) {
-            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<del>$1</del>")
-        }
+        result = strikeRegex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "<del>$1</del>")
 
         return result
     }

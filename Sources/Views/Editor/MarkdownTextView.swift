@@ -73,6 +73,8 @@ struct MarkdownTextView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
+        scrollView.verticalScrollElasticity = .none
+        scrollView.horizontalScrollElasticity = .none
 
         // Build text system
         let textStorage = MarkdownTextStorage()
@@ -91,8 +93,8 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.isHorizontallyResizable = true
         textView.autoresizingMask = [.width, .height]
         textView.allowsUndo = true
-        textView.isRichText = false
-        textView.font = NSFont.systemFont(ofSize: 14)
+        textView.isRichText = true
+        textView.usesFontPanel = false
         textView.textColor = NSColor.textColor
         textView.backgroundColor = NSColor.controlBackgroundColor
         textView.isEditable = true
@@ -101,6 +103,7 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
+        textView.font = NSFont.systemFont(ofSize: 13)
         let paragraphStyle = NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
         var stops: [NSTextTab] = []
         for i in 1..<20 {
@@ -145,10 +148,12 @@ struct MarkdownTextView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
         if textView.string != text {
+            context.coordinator.suppressTextDidChange = true
             let selectedRange = textView.selectedRange()
             textView.string = text
             let safeLocation = min(selectedRange.location, (text as NSString).length)
             textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
+            context.coordinator.suppressTextDidChange = false
         }
     }
 
@@ -157,13 +162,15 @@ struct MarkdownTextView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: MarkdownTextView
         weak var textView: NSTextView?
+        var suppressTextDidChange = false
 
         init(_ parent: MarkdownTextView) {
             self.parent = parent
         }
 
         func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
+            guard !suppressTextDidChange,
+                  let textView = notification.object as? NSTextView else { return }
             DispatchQueue.main.async {
                 self.parent.text = textView.string
             }

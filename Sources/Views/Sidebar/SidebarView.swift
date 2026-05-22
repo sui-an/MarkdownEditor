@@ -31,11 +31,7 @@ struct SidebarView: View {
                         )
                         .contextMenu {
                             Button("Close") {
-                                appState.openFiles.removeAll { $0.id == item.id }
-                                if appState.selectedFileID == item.id {
-                                    appState.saveCurrentFileIfDirty()
-                                    appState.selectedFileID = nil
-                                }
+                                appState.closeFile(id: item.id)
                             }
                         }
                     }
@@ -80,7 +76,9 @@ struct SidebarView: View {
         panel.canChooseFiles = true
         panel.title = "Open Markdown File"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        appState.openFile(url: url)
+        DispatchQueue.main.async {
+            appState.openFile(url: url)
+        }
     }
 
     private func openFolderDialog() {
@@ -90,7 +88,9 @@ struct SidebarView: View {
         panel.allowsMultipleSelection = false
         panel.title = "Open Folder"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        appState.openFolder(url: url)
+        DispatchQueue.main.async {
+            appState.openFolder(url: url)
+        }
     }
 }
 

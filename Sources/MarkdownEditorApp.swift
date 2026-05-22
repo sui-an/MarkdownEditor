@@ -70,7 +70,10 @@ struct OpenFileCommand: View {
         panel.message = "Select a .md file to edit"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        appState?.openFile(url: url)
+        let state = appState
+        DispatchQueue.main.async {
+            state?.openFile(url: url)
+        }
     }
 }
 
@@ -92,7 +95,10 @@ struct OpenFolderCommand: View {
         panel.message = "Select a folder to browse its Markdown files"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        appState?.openFolder(url: url)
+        let state = appState
+        DispatchQueue.main.async {
+            state?.openFolder(url: url)
+        }
     }
 }
 
