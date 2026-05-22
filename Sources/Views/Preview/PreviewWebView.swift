@@ -43,8 +43,8 @@ final class WebViewPool {
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
-
-        findScrollView(in: webView)?.scrollerStyle = .overlay
+        webView.wantsLayer = true
+        findScrollView(in: webView)?.scrollerStyle = .legacy
 
         return webView
     }
@@ -82,8 +82,8 @@ struct PreviewWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        // Ensure overlay scrollbars persist across pool reuse
-        findScrollView(in: webView)?.scrollerStyle = .overlay
+        // Ensure legacy scrollbars persist across pool reuse
+        findScrollView(in: webView)?.scrollerStyle = .legacy
 
         guard hasFile else {
             if context.coordinator.lastLoadedHTML != "" {
@@ -94,7 +94,14 @@ struct PreviewWebView: NSViewRepresentable {
         }
         guard html != context.coordinator.lastLoadedHTML else { return }
         context.coordinator.lastLoadedHTML = html
-        webView.loadHTMLString(html, baseURL: nil)
+        if context.coordinator.isDebouncing {
+            return
+        }
+        context.coordinator.isDebouncing = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak webView] in
+            context.coordinator.isDebouncing = false
+            webView?.loadHTMLString(html, baseURL: nil)
+        }
     }
 
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
@@ -104,6 +111,7 @@ struct PreviewWebView: NSViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var lastLoadedHTML: String = ""
+        var isDebouncing = false
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             webView.evaluateJavaScript("""
