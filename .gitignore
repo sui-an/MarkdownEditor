@@ -1,0 +1,13 @@
+.DS_Store
+build/
+*.app
+*.app.dSYM/
+*.xcuserdata/
+*.xcbkptlist/
+*.xcscmblueprint/
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+generate_icon.py
