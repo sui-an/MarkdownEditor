@@ -1,73 +1,77 @@
 # MarkdownEditor
 
-A native macOS Markdown editor with live preview, KaTeX math, Mermaid diagrams, and syntax highlighting.
-
-Built with SwiftUI + AppKit, compiled entirely without Xcode.
+A macOS-native Markdown editor styled after Apple Notes, with live preview, syntax highlighting, Mermaid diagram support, and image drag-and-drop.
 
 ## Features
 
-- **Live preview** — WebKit-based rendered preview with KaTeX, Mermaid, and Prism.js
-- **Split view** — Side-by-side editor and preview, toggleable
-- **Find** — Cmd+F in editor (native NSTextFinder) or preview (JS `window.find()`)
-- **Outline panel** — Auto-generated heading navigation, click to scroll editor & preview
-- **File management** — Open individual `.md` files or entire folders as workspaces
-- **Auto-save** — 1-second debounced save when a file is open
-- **Lock protection** — Prevents accidental edits
-- **Statistics** — Lines, words, characters, UTF-8 encoding in status bar
-- **App icon** — Custom icon with Markdown `#` symbol
+- **Three-pane layout** — Sidebar (file browser) | Editor (source) | Preview (rendered HTML)
+- **Live preview** — Markdown renders in real time as you type
+- **Syntax highlighting** — Headers, bold, italic, code, links, blockquotes, and more
+- **Mermaid diagrams** — ````mermaid` blocks render as SVG diagrams in the preview
+- **Image drag-and-drop / paste** — Drag images from Finder or paste from clipboard; saved to an `assets/` folder next to the markdown file
+- **Open folders** — Browse all `.md` files in a folder recursively; remove folders from the sidebar at any time
+- **Multi‑window** — Cmd+Shift+N opens a new window, each with independent state
+- **External change detection** — Prompts to reload when a file is modified by another app
+- **Line numbers** — Gutter with line numbers in the editor
+- **Dark mode** — Preview and UI follow the system appearance
 
 ## Requirements
 
-- macOS 14.0+ (Sonoma)
-- Apple Silicon (arm64) — can be cross-compiled for Intel
+- macOS 14.0 (Sonoma) or later
+- Xcode 15.4 or later
 
 ## Build & Run
 
 ```bash
-./build.sh
-open build/MarkdownEditor.app
-```
+# 1. Download the Mermaid library (optional, for diagram rendering)
+bash download_mermaid.sh
 
-The build script compiles all Swift files, bundles the icon into `.app`, and generates a proper `Info.plist`.
+# 2. Open the project in Xcode
+open MarkdownEditor.xcodeproj
+
+# 3. Press Cmd+R to build and run
+```
 
 ## Project Structure
 
 ```
-MarkdownEditor/
-├── Sources/MarkdownEditor/
-│   ├── App.swift              # App lifecycle, menu commands, find actions
-│   ├── DocumentController.swift # File open/save, workspace management
-│   ├── AST.swift              # Markdown AST types
-│   ├── Parser.swift           # Markdown → AST parser
-│   ├── HTMLRenderer.swift     # AST → HTML with KaTeX/Mermaid/Prism
-│   ├── TraceLog.swift         # Debug logging utility
-│   └── Views/
-│       ├── SplitView.swift     # Main layout, toolbar, outline, status bar
-│       ├── Editor/
-│       │   └── EditorView.swift    # NSTextView-based editor
-│       └── Preview/
-│           └── WebPreviewView.swift  # WKWebView preview with find
-├── MarkdownEditor.icns        # App icon
-├── build.sh                   # Build script
-└── .gitignore
+Sources/
+├── MarkdownEditorApp.swift          # @main entry, multi-window, menu commands
+├── Models/
+│   ├── AppState.swift               # Central state (@Observable), per-window instance
+│   └── FileTreeItem.swift           # File/folder tree node model
+├── Services/
+│   ├── FileService.swift            # File I/O, directory scanning, image save
+│   ├── MarkdownParser.swift         # Markdown → HTML, Mermaid block rewriting
+│   ├── ImageHandler.swift           # Drag/paste image → assets/ → ![]() syntax
+│   └── FolderWatcher.swift          # FSEvents-based external change monitoring
+├── Views/
+│   ├── ContentView.swift            # NavigationSplitView three-pane shell
+│   ├── Sidebar/
+│   │   ├── SidebarView.swift        # File browser (opened files + folder trees)
+│   │   ├── FileRowView.swift        # Single file row
+│   │   └── FolderHeaderView.swift   # Folder section header with remove button
+│   ├── Editor/
+│   │   ├── EditorContainerView.swift     # Empty-state / editor switch
+│   │   ├── MarkdownTextView.swift        # NSTextView + image drop/paste handling
+│   │   ├── MarkdownTextStorage.swift     # Debounced regex syntax highlighting
+│   │   └── LineNumberRulerView.swift     # Line number gutter
+│   └── Preview/
+│       └── PreviewWebView.swift          # WKWebView + Mermaid JS injection
+Resources/
+├── Info.plist
+├── Assets.xcassets/AppIcon.appiconset/
+└── mermaid.min.js                   # Download separately (run download_mermaid.sh)
 ```
 
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
-|----------|--------|
-| `Cmd+O` | Open file |
-| `Cmd+Shift+O` | Open folder |
-| `Cmd+S` | Save |
-| `Cmd+Shift+S` | Save As… |
-| `Cmd+F` | Find (routed to editor or preview by focus) |
-| `Cmd+G` | Find next |
-| `Cmd+Shift+G` | Find previous |
-| `Cmd+Shift+E` | Toggle editor pane |
-
-## macOS Notes‑Style Titlebar
-
-The app uses SwiftUI's `.windowStyle(.hiddenTitleBar)`, giving the toolbar a transparent background with frosted-glass vibrancy — matching the look of Apple Notes. The filename is displayed in the toolbar center.
+|---|---|
+| Cmd+O | Open a `.md` file |
+| Cmd+S | Save current file |
+| Cmd+Shift+N | New window |
+| Cmd+V | Paste (auto-detects images) |
 
 ## License
 

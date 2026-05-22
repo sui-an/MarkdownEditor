@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "MarkdownEditor.icns",
+      "idiom" : "mac",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

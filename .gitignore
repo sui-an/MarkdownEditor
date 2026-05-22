@@ -11,3 +11,4 @@ build/
 .vscode/
 .idea/
 generate_icon.py
+Resources/mermaid.min.js
