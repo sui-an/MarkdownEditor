@@ -29,6 +29,7 @@ enum MarkdownParser {
         return """
         <!DOCTYPE html>
         <html><head><meta charset="utf-8">
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>\(css)</style>
         </head><body>\(bodyHTML)\(mermaidScript)</body></html>
@@ -157,12 +158,16 @@ enum MarkdownParser {
     }
 
     private static func inlineFormatting(_ text: String) -> String {
-        var result = text
-
-        // Skip regex on very long lines (base64 data URIs etc.) to avoid backtracking
-        guard text.utf16.count < 500 else {
+        // Fast path: lines without markdown syntax chars just get HTML-escaped.
+        // For 1.1MB of markdown this skips ~70,000 unnecessary regex calls.
+        let hasMarkdownChars = text.contains(where: { char in
+            char == "*" || char == "_" || char == "`" || char == "[" || char == "!" || char == "~"
+        })
+        if !hasMarkdownChars || text.utf16.count >= 500 {
             return escapeHTML(text)
         }
+
+        var result = text
 
         // Images ![alt](url) — replace base64 data URIs with a placeholder
         if imgRegex.firstMatch(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count)) != nil {

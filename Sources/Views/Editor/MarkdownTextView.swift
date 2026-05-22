@@ -77,8 +77,9 @@ struct MarkdownTextView: NSViewRepresentable {
         scrollView.horizontalScrollElasticity = .none
 
         // Build text system
-        let textStorage = MarkdownTextStorage()
+        let textStorage = NSTextStorage()
         let layoutManager = NSLayoutManager()
+        layoutManager.allowsNonContiguousLayout = true
         textStorage.addLayoutManager(layoutManager)
 
         let textContainer = NSTextContainer(containerSize: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
@@ -93,7 +94,7 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.isHorizontallyResizable = true
         textView.autoresizingMask = [.width, .height]
         textView.allowsUndo = true
-        textView.isRichText = true
+        textView.isRichText = false
         textView.usesFontPanel = false
         textView.textColor = NSColor.textColor
         textView.backgroundColor = NSColor.controlBackgroundColor
@@ -134,6 +135,23 @@ struct MarkdownTextView: NSViewRepresentable {
         scrollView.verticalRulerView = ruler
         scrollView.rulersVisible = true
 
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        context.coordinator.scrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { _ in
+            ruler.needsDisplay = true
+        }
+
+        context.coordinator.textChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSText.didChangeNotification,
+            object: textView,
+            queue: .main
+        ) { _ in
+            ruler.needsDisplay = true
+        }
+
         // Text inset — only horizontal padding, no top gap
         textView.textContainerInset = NSSize(width: 8, height: 0)
 
@@ -163,9 +181,16 @@ struct MarkdownTextView: NSViewRepresentable {
         var parent: MarkdownTextView
         weak var textView: NSTextView?
         var suppressTextDidChange = false
+        var scrollObserver: Any?
+        var textChangeObserver: Any?
 
         init(_ parent: MarkdownTextView) {
             self.parent = parent
+        }
+
+        deinit {
+            if let obs = scrollObserver { NotificationCenter.default.removeObserver(obs) }
+            if let obs = textChangeObserver { NotificationCenter.default.removeObserver(obs) }
         }
 
         func textDidChange(_ notification: Notification) {

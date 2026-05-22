@@ -23,17 +23,7 @@ final class LineNumberRulerView: NSRulerView {
               let textContainer = textView.textContainer else { return }
 
         let visibleRect = textView.visibleRect
-        let visibleGlyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
-        let charRange = layoutManager.characterRange(forGlyphRange: visibleGlyphRange, actualGlyphRange: nil)
         let textContent = textView.string as NSString
-
-        let lineCount = textContent.length > 0
-            ? textContent.lineRange(for: charRange).length
-            : 1
-
-        let firstLine = textContent.length > 0
-            ? textContent.lineRange(for: NSRange(location: 0, length: 1)).length
-            : 1
 
         let paraStyle = NSMutableParagraphStyle()
         paraStyle.alignment = .right
@@ -48,14 +38,20 @@ final class LineNumberRulerView: NSRulerView {
         var lineIndex = 1
         var charIndex = 0
 
-        while charIndex < textContent.length && lineIndex <= charRange.location + charRange.length + 1 {
+        while charIndex < textContent.length {
             let lineRange = textContent.lineRange(for: NSRange(location: charIndex, length: 0))
             let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
             let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
 
+            // Stop once we're past the visible area (glyphRect is zero for non-laid-out lines beyond viewport)
+            if glyphRect.minY > visibleRect.maxY {
+                break
+            }
+
             if glyphRect.maxY >= visibleRect.minY && glyphRect.minY <= visibleRect.maxY {
                 let lineStr = "\(lineIndex)"
-                let y = glyphRect.minY + (glyphRect.height - font.pointSize) / 2
+                // Convert from document Y to ruler-visible Y
+                let y = glyphRect.minY - visibleRect.minY + (glyphRect.height - font.pointSize) / 2
                 let labelRect = NSRect(x: 0, y: y, width: ruleThickness - 4, height: font.pointSize)
                 lineStr.draw(in: labelRect, withAttributes: attrs)
             }

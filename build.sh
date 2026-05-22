@@ -91,7 +91,6 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Views/ContentView.swift"
   "$PROJECT_DIR/Sources/Views/Editor/EditorContainerView.swift"
   "$PROJECT_DIR/Sources/Views/Editor/LineNumberRulerView.swift"
-  "$PROJECT_DIR/Sources/Views/Editor/MarkdownTextStorage.swift"
   "$PROJECT_DIR/Sources/Views/Editor/MarkdownTextView.swift"
   "$PROJECT_DIR/Sources/Views/Preview/PreviewWebView.swift"
   "$PROJECT_DIR/Sources/Views/Sidebar/FileRowView.swift"

@@ -13,9 +13,22 @@ final class AppState {
     var isFileDirty: Bool = false
     var isLoadingFile: Bool = false
 
+    // Cache for already-read file contents and rendered HTML
+    private struct FileCache {
+        var fullContent: String
+        var strippedContent: String
+        var base64Segments: [String]
+        var renderedHTML: String?
+        var lastAccess: Date
+    }
+    private var fileCache: [URL: FileCache] = [:]
+    private let maxCacheSize = 50
+
     private var folderWatchers: [UUID: FolderWatcher] = [:]
     private var selectedFileURL: URL?
     private var lastSavedContent: String = ""
+    private var fullFileContent: String = ""
+    private var base64Segments: [String] = []
 
     // MARK: - Open File
 
@@ -32,12 +45,16 @@ final class AppState {
         isLoadingFile = true
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
+            guard let self else { return }
             do {
                 let content = try FileService.readFile(at: url)
+                let stripped = Self.stripBase64Segments(from: content)
+                let cache = FileCache(fullContent: content, strippedContent: stripped.stripped, base64Segments: stripped.segments, renderedHTML: nil, lastAccess: Date())
                 DispatchQueue.main.async {
+                    self.fileCache[url] = cache
+                    self.evictCacheIfNeeded()
                     self.isLoadingFile = false
-                    self.setCurrentFile(url: url, content: content, id: item.id)
+                    self.setCurrentFile(url: url, content: content, strippedContent: stripped.stripped, segments: stripped.segments, id: item.id)
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -80,6 +97,10 @@ final class AppState {
 
     func closeFile(id: UUID) {
         saveCurrentFileIfDirty()
+        // Clean cache before removing the item
+        if let item = openFiles.first(where: { $0.id == id }) {
+            fileCache.removeValue(forKey: item.url)
+        }
         openFiles.removeAll { $0.id == id }
         if selectedFileID == id {
             clearSelection()
@@ -91,12 +112,18 @@ final class AppState {
     func removeFolder(id: UUID) {
         guard let idx = rootFolders.firstIndex(where: { $0.id == id }) else { return }
 
+        let folder = rootFolders[idx]
+
         if let selectedID = selectedFileID {
-            let folder = rootFolders[idx]
             let fileIDs = folder.allMarkdownFiles.map { $0.id }
             if fileIDs.contains(selectedID) {
                 clearSelection()
             }
+        }
+
+        // Clean cache for all files in this folder
+        for file in folder.allMarkdownFiles {
+            fileCache.removeValue(forKey: file.url)
         }
 
         folderWatchers[id]?.stop()
@@ -114,15 +141,27 @@ final class AppState {
         let allItems = allAvailableFiles()
         guard let item = allItems.first(where: { $0.id == id }) else { return }
 
+        // Use cache if available — avoids disk read and HTML re-parse
+        if var cached = fileCache[item.url] {
+            cached.lastAccess = Date()
+            fileCache[item.url] = cached
+            setCurrentFile(url: item.url, content: cached.fullContent, strippedContent: cached.strippedContent, segments: cached.base64Segments, id: item.id, cachedHTML: cached.renderedHTML)
+            return
+        }
+
         isLoadingFile = true
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
+            guard let self else { return }
             do {
                 let content = try FileService.readFile(at: item.url)
+                let stripped = Self.stripBase64Segments(from: content)
+                let cache = FileCache(fullContent: content, strippedContent: stripped.stripped, base64Segments: stripped.segments, renderedHTML: nil, lastAccess: Date())
                 DispatchQueue.main.async {
+                    self.fileCache[item.url] = cache
+                    self.evictCacheIfNeeded()
                     self.isLoadingFile = false
-                    self.setCurrentFile(url: item.url, content: content, id: item.id)
+                    self.setCurrentFile(url: item.url, content: content, strippedContent: stripped.stripped, segments: stripped.segments, id: item.id)
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -141,18 +180,33 @@ final class AppState {
 
     func updateContent(_ newContent: String) {
         currentFileContent = newContent
-        isFileDirty = newContent != lastSavedContent
+        fullFileContent = restoreFullContent(from: newContent)
+        // Invalidate cached HTML and update access time
+        if let url = currentFileURL {
+            fileCache[url]?.renderedHTML = nil
+            fileCache[url]?.lastAccess = Date()
+        }
+        let wasDirty = isFileDirty
+        isFileDirty = fullFileContent != lastSavedContent
+        // Skip regeneration if we're loading a file (no content actually changed).
+        // On programmatic file load, fullFileContent == lastSavedContent, so isFileDirty stays false.
+        // On user edit, isFileDirty transitions from false → true.
+        guard isFileDirty || wasDirty else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             self?.regenerateHTML()
         }
     }
 
     private func regenerateHTML() {
-        let content = currentFileContent
+        let content = fullFileContent
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let html = MarkdownParser.parseToHTML(content)
             DispatchQueue.main.async {
-                self?.renderedHTML = html
+                guard let self else { return }
+                self.renderedHTML = html
+                if let url = self.currentFileURL {
+                    self.fileCache[url]?.renderedHTML = html
+                }
             }
         }
     }
@@ -162,8 +216,8 @@ final class AppState {
     func saveCurrentFile() {
         guard let url = currentFileURL, isFileDirty else { return }
         do {
-            try FileService.writeFile(currentFileContent, to: url)
-            lastSavedContent = currentFileContent
+            try FileService.writeFile(fullFileContent, to: url)
+            lastSavedContent = fullFileContent
             isFileDirty = false
         } catch {
             let alert = NSAlert()
@@ -181,15 +235,30 @@ final class AppState {
 
     // MARK: - Internal
 
-    private func setCurrentFile(url: URL, content: String, id: UUID) {
+    private func setCurrentFile(url: URL, content: String, strippedContent: String, segments: [String], id: UUID, cachedHTML: String? = nil) {
         saveCurrentFileIfDirty()
         selectedFileID = id
         selectedFileURL = url
         currentFileURL = url
-        currentFileContent = content
+        fullFileContent = content
+        currentFileContent = strippedContent
+        base64Segments = segments
         lastSavedContent = content
         isFileDirty = false
-        regenerateHTML()
+        if let cachedHTML {
+            renderedHTML = cachedHTML
+        } else {
+            regenerateHTML()
+        }
+    }
+
+    private func evictCacheIfNeeded() {
+        guard fileCache.count > maxCacheSize else { return }
+        let sorted = fileCache.sorted { $0.value.lastAccess < $1.value.lastAccess }
+        let toRemove = sorted.prefix(max(1, fileCache.count / 4))
+        for (url, _) in toRemove {
+            fileCache.removeValue(forKey: url)
+        }
     }
 
     private func clearSelection() {
@@ -198,9 +267,11 @@ final class AppState {
         selectedFileURL = nil
         currentFileURL = nil
         currentFileContent = ""
+        fullFileContent = ""
         lastSavedContent = ""
         isFileDirty = false
         renderedHTML = ""
+        base64Segments = []
     }
 
     func allAvailableFiles() -> [FileTreeItem] {
@@ -222,6 +293,7 @@ final class AppState {
             if ext == "md" {
                 let fm = FileManager.default
                 if !fm.fileExists(atPath: url.path) {
+                    fileCache.removeValue(forKey: url)
                     removeFileFromFolder(rootFolderID: rootFolderID, url: url)
                 } else {
                     addFileToFolder(rootFolderID: rootFolderID, url: url)
@@ -286,11 +358,49 @@ final class AppState {
         if alert.runModal() == .alertFirstButtonReturn {
             do {
                 let content = try FileService.readFile(at: url)
-                currentFileContent = content
+                let stripped = Self.stripBase64Segments(from: content)
+                fullFileContent = content
+                currentFileContent = stripped.stripped
+                base64Segments = stripped.segments
                 lastSavedContent = content
                 isFileDirty = false
+                // Invalidate cache so next switch re-reads fresh content
+                fileCache.removeValue(forKey: url)
                 regenerateHTML()
             } catch {}
         }
+    }
+
+    // MARK: - Base64 Handling
+
+    private static func stripBase64Segments(from content: String) -> (stripped: String, segments: [String]) {
+        let pattern = #"!\[([^\]]*)\]\((data:[^)]+)\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return (content, [])
+        }
+        let nsContent = content as NSString
+        var segments: [String] = []
+        var result = content
+        var offset = 0
+        for match in regex.matches(in: content, options: [], range: NSRange(location: 0, length: nsContent.length)) {
+            let url = nsContent.substring(with: match.range(at: 2))
+            segments.append(url)
+            let marker = "\u{2318}BS64_\(segments.count - 1)\u{2318}"
+            let alt = nsContent.substring(with: match.range(at: 1))
+            let replacement = "![\(alt)](\(marker))"
+            let adjRange = NSRange(location: match.range.location + offset, length: match.range.length)
+            result = (result as NSString).replacingCharacters(in: adjRange, with: replacement)
+            offset += replacement.utf16.count - match.range.length
+        }
+        return (result, segments)
+    }
+
+    private func restoreFullContent(from displayContent: String) -> String {
+        var result = displayContent
+        for (index, segment) in base64Segments.enumerated().reversed() {
+            let marker = "\u{2318}BS64_\(index)\u{2318}"
+            result = result.replacingOccurrences(of: marker, with: segment)
+        }
+        return result
     }
 }
