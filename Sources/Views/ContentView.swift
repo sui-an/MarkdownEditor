@@ -23,8 +23,7 @@ struct ContentView: View {
     @State private var appState = AppState()
     @AppStorage("previewOnly") private var previewOnly = false
 
-    /// Stored in UserDefaults so sidebar visibility survives
-    /// the 2-col / 3-col layout swap triggered by Preview Only.
+    /// Stored in UserDefaults so sidebar visibility survives app restarts.
     @AppStorage("sidebarVis") private var sidebarVis = 0
 
     private var columnVisibility: Binding<NavigationSplitViewVisibility> {
@@ -35,21 +34,18 @@ struct ContentView: View {
     }
 
     var body: some View {
-        Group {
+        NavigationSplitView(columnVisibility: columnVisibility) {
+            sidebarContent
+        } detail: {
             if previewOnly {
-                NavigationSplitView(columnVisibility: columnVisibility) {
-                    sidebarContent
-                } detail: {
-                    previewContent
-                }
+                previewContent
             } else {
-                NavigationSplitView(columnVisibility: columnVisibility) {
-                    sidebarContent
-                } content: {
-                    editorContent
-                } detail: {
-                    previewContent
-                }
+                ResizableHSplitView(
+                    minLeftWidth: 200,
+                    minRightWidth: 200,
+                    left: { editorContent },
+                    right: { previewContent }
+                )
             }
         }
         .navigationSplitViewStyle(.prominentDetail)
@@ -59,7 +55,7 @@ struct ContentView: View {
         .toolbar(id: "main") {
             ToolbarItem(id: "previewToggle", placement: .primaryAction) {
                 Button {
-                    previewOnly.toggle()
+                    togglePreviewOnly()
                 } label: {
                     Image(systemName: previewOnly
                           ? "doc.richtext"
@@ -70,6 +66,12 @@ struct ContentView: View {
         }
     }
 
+    private func togglePreviewOnly() {
+        // Toggle previewOnly without affecting sidebar visibility.
+        // Sidebar is independently managed by NavigationSplitView's native toggle.
+        previewOnly.toggle()
+    }
+
     private var sidebarContent: some View {
         SidebarView()
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 400)
@@ -77,7 +79,7 @@ struct ContentView: View {
 
     private var editorContent: some View {
         EditorContainerView()
-            .frame(minWidth: 400, idealWidth: 1000)
+            .frame(minWidth: 200)
     }
 
     private var previewContent: some View {
@@ -85,7 +87,7 @@ struct ContentView: View {
             html: appState.renderedHTML,
             hasFile: appState.currentFileURL != nil
         )
-            .frame(minWidth: 250, idealWidth: 500)
+            .frame(minWidth: 200)
     }
 
     private var windowTitle: String {

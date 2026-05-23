@@ -177,7 +177,7 @@ struct MarkdownTextView: NSViewRepresentable {
         // every time SwiftUI re-renders the view.
         context.coordinator.suppressTextDidChange = true
         if let storage = textView.textStorage {
-            context.coordinator.restoreBase64AttachmentsToMarkdown(in: storage)
+            context.coordinator.restoreImageAttachmentsToMarkdown(in: storage)
         }
         let currentRaw = textView.string
         context.coordinator.suppressTextDidChange = false
@@ -189,11 +189,11 @@ struct MarkdownTextView: NSViewRepresentable {
             let safeLocation = min(selectedRange.location, (text as NSString).length)
             textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
             context.coordinator.suppressTextDidChange = false
-            context.coordinator.scheduleBase64Processing()
+            context.coordinator.scheduleImageProcessing()
         } else {
             // Text matches — just make sure base64 images are rendered
             // (may have been cleared by a previous updateNSView pass)
-            context.coordinator.scheduleBase64Processing()
+            context.coordinator.scheduleImageProcessing()
         }
     }
 
@@ -206,9 +206,9 @@ struct MarkdownTextView: NSViewRepresentable {
         var scrollObserver: Any?
         var textChangeObserver: Any?
 
-        private static let base64ImageRegex: NSRegularExpression = {
+        private static let imageRegex: NSRegularExpression = {
             try! NSRegularExpression(
-                pattern: #"!\[([^\]]*)\]\(data:image\/[^;]+;base64,([^)\s]+)\)"#,
+                pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)"#,
                 options: []
             )
         }()
@@ -232,7 +232,7 @@ struct MarkdownTextView: NSViewRepresentable {
             // the SwiftUI binding receives clean text (not attachment placeholder chars)
             if let storage = textView.textStorage {
                 suppressTextDidChange = true
-                restoreBase64AttachmentsToMarkdown(in: storage)
+                restoreImageAttachmentsToMarkdown(in: storage)
                 suppressTextDidChange = false
             }
 
@@ -240,17 +240,17 @@ struct MarkdownTextView: NSViewRepresentable {
                 self.parent.text = textView.string
             }
 
-            scheduleBase64Processing()
+            scheduleImageProcessing()
         }
 
-        // MARK: - Base64 Image Processing
+        // MARK: - Inline Image Processing
 
-        func scheduleBase64Processing() {
-            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(processBase64Images), object: nil)
-            perform(#selector(processBase64Images), with: nil, afterDelay: 0.2)
+        func scheduleImageProcessing() {
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(processInlineImages), object: nil)
+            perform(#selector(processInlineImages), with: nil, afterDelay: 0.2)
         }
 
-        func restoreBase64AttachmentsToMarkdown(in textStorage: NSTextStorage) {
+        func restoreImageAttachmentsToMarkdown(in textStorage: NSTextStorage) {
             let fullRange = NSRange(location: 0, length: textStorage.length)
             textStorage.enumerateAttribute(.attachment, in: fullRange, options: .reverse) { value, range, _ in
                 if let attachment = value as? MarkdownImageAttachment, !attachment.markdownSource.isEmpty {
@@ -259,7 +259,7 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
 
-        @objc private func processBase64Images() {
+        @objc private func processInlineImages() {
             guard let textView = textView,
                   let textStorage = textView.textStorage else { return }
 
@@ -267,7 +267,7 @@ struct MarkdownTextView: NSViewRepresentable {
             let nsString = text as NSString
             let fullRange = NSRange(location: 0, length: nsString.length)
 
-            let matches = Self.base64ImageRegex.matches(in: text, options: [], range: fullRange)
+            let matches = Self.imageRegex.matches(in: text, options: [], range: fullRange)
             guard !matches.isEmpty else { return }
 
             suppressTextDidChange = true
@@ -279,15 +279,15 @@ struct MarkdownTextView: NSViewRepresentable {
 
             for match in matches.reversed() {
                 let fullMatchRange = match.range(at: 0)
-                let base64Range = match.range(at: 2)
+                let urlRange = match.range(at: 2)
 
                 guard fullMatchRange.location != NSNotFound,
-                      base64Range.location != NSNotFound,
-                      base64Range.length > 0 else { continue }
+                      urlRange.location != NSNotFound,
+                      urlRange.length > 0 else { continue }
 
-                let base64String = nsString.substring(with: base64Range)
-                guard let imageData = Data(base64Encoded: base64String, options: .ignoreUnknownCharacters),
-                      let image = NSImage(data: imageData) else { continue }
+                let urlStr = nsString.substring(with: urlRange)
+
+                guard let image = loadImage(from: urlStr) else { continue }
 
                 let attachment = MarkdownImageAttachment()
                 attachment.markdownSource = nsString.substring(with: fullMatchRange)
@@ -316,10 +316,31 @@ struct MarkdownTextView: NSViewRepresentable {
                 textStorage.replaceCharacters(in: fullMatchRange, with: attrString)
             }
 
-            // Invalidate layout so attachments appear
             let updatedRange = NSRange(location: 0, length: textStorage.length)
             for layoutManager in textStorage.layoutManagers {
                 layoutManager.invalidateLayout(forCharacterRange: updatedRange, actualCharacterRange: nil)
+            }
+        }
+
+        // MARK: - Image Loading
+
+        private func loadImage(from urlStr: String) -> NSImage? {
+            if urlStr.hasPrefix("data:image/") {
+                guard let commaIdx = urlStr.firstIndex(of: ",") else { return nil }
+                let base64Data = String(urlStr[urlStr.index(after: commaIdx)...])
+                guard !base64Data.isEmpty,
+                      let data = Data(base64Encoded: base64Data, options: .ignoreUnknownCharacters),
+                      let image = NSImage(data: data) else { return nil }
+                return image
+            } else {
+                guard let mdURL = parent.currentFileURL else { return nil }
+                let resolvedURL: URL
+                if urlStr.hasPrefix("/") {
+                    resolvedURL = URL(fileURLWithPath: urlStr)
+                } else {
+                    resolvedURL = mdURL.deletingLastPathComponent().appendingPathComponent(urlStr)
+                }
+                return NSImage(contentsOf: resolvedURL)
             }
         }
 
@@ -384,7 +405,7 @@ struct MarkdownTextView: NSViewRepresentable {
             suppressTextDidChange = false
             DispatchQueue.main.async {
                 self.parent.text = newText
-                self.scheduleBase64Processing()
+                self.scheduleImageProcessing()
             }
         }
 

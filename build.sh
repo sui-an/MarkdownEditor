@@ -124,6 +124,7 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Services/ImageHandler.swift"
   "$PROJECT_DIR/Sources/Services/MarkdownParser.swift"
   "$PROJECT_DIR/Sources/Views/ContentView.swift"
+  "$PROJECT_DIR/Sources/Views/ResizableHSplitView.swift"
   "$PROJECT_DIR/Sources/Views/Editor/EditorContainerView.swift"
   "$PROJECT_DIR/Sources/Views/Editor/LineNumberRulerView.swift"
   "$PROJECT_DIR/Sources/Views/Editor/MarkdownTextStorage.swift"
