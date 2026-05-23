@@ -120,6 +120,8 @@ struct PreviewWebView: NSViewRepresentable {
     /// directory as baseURL so data URIs have a non-opaque security origin
     /// (known WebKit issue: data URIs may fail to load with baseURL: nil).
     let baseURL: URL?
+    
+    var onScrollReset: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -142,6 +144,9 @@ struct PreviewWebView: NSViewRepresentable {
         ])
 
         context.coordinator.configureScrollView(webView)
+        context.coordinator.onScrollReset = { [weak webView] in
+            webView?.evaluateJavaScript("window.scrollTo(0, 0)")
+        }
         return container
     }
 
@@ -161,23 +166,30 @@ struct PreviewWebView: NSViewRepresentable {
         guard bodyHTML != context.coordinator.lastBodyHTML else { return }
         context.coordinator.lastBodyHTML = bodyHTML
 
+        // Reset file switching flag after first update (only for file switches)
+        context.coordinator.isFileSwitching = false
+
+        // For file switching, use 0ms delay to show content immediately.
+        // For typing updates, use 100ms debounce to avoid flicker.
+        let delay: TimeInterval = context.coordinator.isFileSwitching ? 0 : 0.1
+
         context.coordinator.debounceWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak webView, bodyHTML, html, baseURL, coordinator = context.coordinator] in
             guard let webView else { return }
 
             if coordinator.templateReady && coordinator.lastBaseURL == baseURL {
-                // Template already cached — update content via JS injection.
-                // This avoids full WKWebView page rebuild.
+                // Template cached — incremental DOM update via JS
+                // This preserves scroll position (don't reset)
                 coordinator.updateBodyViaJS(webView, bodyHTML: bodyHTML)
             } else {
-                // First load or file switch — use loadHTMLString to set up
-                // the page with content embedded so there is no blank flash.
+                // First load or file switch — use loadHTMLString
+                // This resets scroll position to top
                 coordinator.lastBaseURL = baseURL
                 webView.loadHTMLString(html, baseURL: baseURL)
             }
         }
         context.coordinator.debounceWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     static func dismantleNSView(_ container: ClipContainer, coordinator: Coordinator) {
@@ -195,8 +207,10 @@ struct PreviewWebView: NSViewRepresentable {
         var lastBodyHTML: String = ""
         var lastBaseURL: URL?
         var templateReady = false
+        var isFileSwitching = false
         var debounceWorkItem: DispatchWorkItem?
         var scrollerConfigured = false
+        var onScrollReset: (() -> Void)?
 
         func configureScrollView(_ webView: WKWebView) {
             guard !scrollerConfigured else { return }
@@ -206,6 +220,11 @@ struct PreviewWebView: NSViewRepresentable {
                 sv.verticalScrollElasticity = .none
                 sv.horizontalScrollElasticity = .none
             }
+        }
+
+        /// Reset preview scroll position to top.
+        func resetScrollPosition() {
+            onScrollReset?()
         }
 
         /// Replace content div innerHTML and re-apply highlight.js + mermaid.

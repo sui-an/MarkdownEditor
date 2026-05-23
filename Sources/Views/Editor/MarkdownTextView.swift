@@ -67,6 +67,7 @@ final class ImageDropTextView: NSTextView {
 struct MarkdownTextView: NSViewRepresentable {
     @Binding var text: String
     var currentFileURL: URL?
+    var onScrollReset: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -165,6 +166,12 @@ struct MarkdownTextView: NSViewRepresentable {
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
 
+        // Setup scroll reset callback
+        context.coordinator.onScrollReset = { [weak scrollView] in
+            guard let textView = scrollView?.documentView as? NSTextView else { return }
+            textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        }
+
         return scrollView
     }
 
@@ -204,6 +211,7 @@ struct MarkdownTextView: NSViewRepresentable {
         var suppressTextDidChange = false
         var scrollObserver: Any?
         var textChangeObserver: Any?
+        var onScrollReset: (() -> Void)?
 
         /// Cache of decoded NSImages keyed by URL string. Avoids re-decoding
         /// base64 images on every processInlineImages call (the biggest bottleneck

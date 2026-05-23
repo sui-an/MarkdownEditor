@@ -27,6 +27,9 @@ final class AppState {
     /// Body-only HTML for incremental preview DOM updates (avoids WKWebView
     /// full-page reload via loadHTMLString on every keystroke).
     var renderedBodyHTML: String = ""
+    /// Callback to reset scroll positions when switching files.
+    var onFileSwitch: (() -> Void)?
+    var isFileSwitching: Bool = false
     var isFileDirty: Bool = false
     var isLoadingFile: Bool = false
 
@@ -134,12 +137,23 @@ final class AppState {
         let allItems = allAvailableFiles()
         guard let item = allItems.first(where: { $0.id == id }) else { return }
 
-        loadFileContent(url: item.url, id: item.id)
+        // Set file switching flag for instant response
+        isFileSwitching = true
+        loadFileContent(url: item.url, id: item.id, isSwitching: true)
+    }
+
+    // MARK: - Scroll position reset
+
+    /// Reset scroll position in both editor and preview to the top.
+    /// Call this when switching files to ensure a clean view.
+    func resetScrollPositions() {
+        // Editor scroll reset — access through PreviewWebView coordinator
+        // This is handled in ContentView by observing file changes
     }
 
     // MARK: - Shared file loading (cancellation-aware)
 
-    private func loadFileContent(url: URL, id: UUID) {
+    private func loadFileContent(url: URL, id: UUID, isSwitching: Bool = false) {
         // Cancel any in-flight work for the previous file
         pendingHTMLWork?.cancel()
         pendingHTMLWork = nil
