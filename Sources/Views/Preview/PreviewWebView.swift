@@ -21,6 +21,7 @@ final class WebViewPool {
         guard let webView else { return }
         webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
         webView.navigationDelegate = nil
+        findScrollView(in: webView)?.scrollerStyle = .overlay
         preWarmedView?.loadHTMLString("<html><body></body></html>", baseURL: nil)
         preWarmedView = webView
     }
@@ -44,7 +45,7 @@ final class WebViewPool {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         webView.wantsLayer = true
-        findScrollView(in: webView)?.scrollerStyle = .legacy
+        findScrollView(in: webView)?.scrollerStyle = .overlay
 
         return webView
     }
@@ -63,28 +64,36 @@ private func findScrollView(in view: NSView) -> NSScrollView? {
 // MARK: - PreviewWebView
 
 struct PreviewWebView: NSViewRepresentable {
-    /// The full HTML document to display. Passed as a direct parameter so that
-    /// SwiftUI reliably calls updateNSView on every change (unlike @Environment
-    /// which may miss property-level updates in NSViewRepresentable).
     let html: String
-
-    /// When false, the preview shows a blank page.
     let hasFile: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> ClipContainer {
+        let container = ClipContainer()
+        container.wantsLayer = true
+        container.layer?.masksToBounds = true
+
         let webView = WebViewPool.shared.dequeue()
         webView.navigationDelegate = context.coordinator
-        return webView
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+
+        context.coordinator.configureScrollView(webView)
+        return container
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {
-        // Ensure legacy scrollbars persist across pool reuse
-        findScrollView(in: webView)?.scrollerStyle = .legacy
-
+    func updateNSView(_ container: ClipContainer, context: Context) {
+        guard let webView = container.subviews.first as? WKWebView else { return }
+        context.coordinator.configureScrollView(webView)
         guard hasFile else {
             if context.coordinator.lastLoadedHTML != "" {
                 context.coordinator.lastLoadedHTML = ""
@@ -94,24 +103,38 @@ struct PreviewWebView: NSViewRepresentable {
         }
         guard html != context.coordinator.lastLoadedHTML else { return }
         context.coordinator.lastLoadedHTML = html
-        if context.coordinator.isDebouncing {
-            return
-        }
-        context.coordinator.isDebouncing = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak webView] in
-            context.coordinator.isDebouncing = false
+
+        context.coordinator.debounceWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak webView, html] in
             webView?.loadHTMLString(html, baseURL: nil)
         }
+        context.coordinator.debounceWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
     }
 
-    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+    static func dismantleNSView(_ container: ClipContainer, coordinator: Coordinator) {
+        guard let webView = container.subviews.first as? WKWebView else { return }
+        webView.removeFromSuperview()
+        coordinator.debounceWorkItem?.cancel()
+        coordinator.debounceWorkItem = nil
         coordinator.lastLoadedHTML = ""
-        WebViewPool.shared.enqueue(nsView)
+        WebViewPool.shared.enqueue(webView)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var lastLoadedHTML: String = ""
-        var isDebouncing = false
+        var debounceWorkItem: DispatchWorkItem?
+        var scrollerConfigured = false
+
+        func configureScrollView(_ webView: WKWebView) {
+            guard !scrollerConfigured else { return }
+            scrollerConfigured = true
+            if let sv = findScrollView(in: webView) {
+                sv.scrollerStyle = .overlay
+                sv.verticalScrollElasticity = .none
+                sv.horizontalScrollElasticity = .none
+            }
+        }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             webView.evaluateJavaScript("""
@@ -124,4 +147,9 @@ struct PreviewWebView: NSViewRepresentable {
             """)
         }
     }
+}
+
+// MARK: - Clip container
+
+final class ClipContainer: NSView {
 }

@@ -32,11 +32,11 @@ final class MarkdownTextStorage: NSTextStorage {
     }
 
     @objc private func applyHighlighting() {
-        // Remove all explicit foregroundColor so NSTextView's typingAttributes
-        // (which properly handle CJK font cascading) provide the default.
-        // Then re-apply pattern-specific colors only where syntax is detected.
-        backingStore.removeAttribute(.foregroundColor,
-                                     range: NSRange(location: 0, length: backingStore.length))
+        // Reset foreground to dynamic NSColor.textColor which adapts to
+        // light/dark mode automatically. Only .foregroundColor is touched —
+        // .font is never set globally, preserving CJK font cascading.
+        backingStore.addAttribute(.foregroundColor, value: NSColor.textColor,
+                                  range: NSRange(location: 0, length: backingStore.length))
 
         let text = backingStore.string as NSString
         let length = text.length

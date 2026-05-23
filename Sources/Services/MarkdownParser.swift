@@ -240,6 +240,7 @@ enum MarkdownParser {
             margin: 0 auto;
             padding: 24px 20px 32px;
             word-wrap: break-word;
+            overflow-x: hidden;
         }
         h1 { font-size: 30px; font-weight: 700; margin: 32px 0 12px; }
         h2 { font-size: 24px; font-weight: 600; margin: 28px 0 10px; }

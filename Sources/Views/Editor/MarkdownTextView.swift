@@ -158,8 +158,8 @@ struct MarkdownTextView: NSViewRepresentable {
             ruler.needsDisplay = true
         }
 
-        // Text inset — only horizontal padding, no top gap
-        textView.textContainerInset = NSSize(width: 8, height: 0)
+        // Text inset — horizontal padding + top spacing
+        textView.textContainerInset = NSSize(width: 8, height: 12)
 
         // Disable automatic content insets so text exits cleanly at top
         scrollView.automaticallyAdjustsContentInsets = false

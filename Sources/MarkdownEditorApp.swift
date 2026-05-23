@@ -51,6 +51,11 @@ struct MarkdownEditorApp: App {
             CommandGroup(after: .saveItem) {
                 SaveCommand()
             }
+
+            // View menu
+            CommandGroup(before: .toolbar) {
+                TogglePreviewCommand()
+            }
         }
     }
 }
@@ -118,5 +123,16 @@ struct SaveCommand: View {
         }
         .keyboardShortcut("s", modifiers: .command)
         .disabled(appState?.currentFileURL == nil)
+    }
+}
+
+struct TogglePreviewCommand: View {
+    @AppStorage("previewOnly") private var previewOnly = false
+
+    var body: some View {
+        Button("Preview Only") {
+            previewOnly.toggle()
+        }
+        .keyboardShortcut("p", modifiers: [.command, .shift])
     }
 }
