@@ -61,7 +61,9 @@ enum MarkdownParser {
     }
 
     /// Parse markdown to full HTML document. Thread-safe.
-    static func parseToHTML(_ markdown: String) -> String {
+    /// Returns both the body-only HTML (for incremental JS injection) and the
+    /// full document (for initial loadHTMLString).
+    static func parseToHTML(_ markdown: String) -> (body: String, full: String) {
         #if canImport(CCmarkGfm)
         ensureGFMExtensions()
         #endif
@@ -75,14 +77,15 @@ enum MarkdownParser {
         let css = Self.previewCSS
         let mermaidScript = mermaidResult.blocks.isEmpty ? "" : mermaidHTML()
 
-        return """
+        let full = """
         <!DOCTYPE html>
         <html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>\(css)</style>
         \(mermaidScript)
-        </head><body>\(finalBody)</body></html>
+        </head><body><div id="md-content">\(finalBody)</div></body></html>
         """
+        return (finalBody, full)
     }
 
     /// Parse markdown to HTML body fragment only (no wrapper, no CSS).
@@ -187,14 +190,11 @@ enum MarkdownParser {
         return out
     }
 
+    /// Returns the runner script. mermaid.min.js itself is loaded via
+    /// WKUserScript (WebViewPool) so it persists across incremental
+    /// DOM updates without re-injecting 3.3MB of JS on every change.
     private static func mermaidHTML() -> String {
-        var js = ""
-        if let path = Bundle.main.path(forResource: "mermaid.min", ofType: "js"),
-           let content = try? String(contentsOfFile: path) {
-            js = content
-        }
-        return """
-        <script>\(js)</script>
+        """
         <script>
         setTimeout(function() {
             if (typeof mermaid !== 'undefined') {

@@ -6,9 +6,11 @@ import AppKit
 
 private final class CachedHTML {
     let html: String
+    let bodyHTML: String
 
-    init(html: String) {
+    init(html: String, bodyHTML: String) {
         self.html = html
+        self.bodyHTML = bodyHTML
     }
 }
 
@@ -22,6 +24,9 @@ final class AppState {
     var currentFileContent: String = ""
     var currentFileURL: URL?
     var renderedHTML: String = ""
+    /// Body-only HTML for incremental preview DOM updates (avoids WKWebView
+    /// full-page reload via loadHTMLString on every keystroke).
+    var renderedBodyHTML: String = ""
     var isFileDirty: Bool = false
     var isLoadingFile: Bool = false
 
@@ -157,6 +162,7 @@ final class AppState {
             lastSavedContent = currentFileContent
             isFileDirty = false
             renderedHTML = cached.html
+            renderedBodyHTML = cached.bodyHTML
             isLoadingFile = false
             return
         }
@@ -187,15 +193,18 @@ final class AppState {
                     return
                 }
 
-                // Generate full HTML on background (single call — no duplicate parsing)
-                let fullHTML = MarkdownParser.parseToHTML(content)
+                // Generate HTML on background — single parse pass returns both
+                // the body-only fragment (for incremental JS injection into the
+                // preview) and the full document (for initial loadHTMLString).
+                let (bodyHTML, fullHTML) = MarkdownParser.parseToHTML(content)
 
                 DispatchQueue.main.async { [weak self] in
                     guard let self, token == self.generation else { return }
-                    let cached = CachedHTML(html: fullHTML)
+                    let cached = CachedHTML(html: fullHTML, bodyHTML: bodyHTML)
                     self.htmlCache.setObject(cached, forKey: url as NSURL, cost: fullHTML.utf8.count)
                     self.cachedContentHash[url] = cacheKey
                     self.renderedHTML = fullHTML
+                    self.renderedBodyHTML = bodyHTML
                 }
             } catch {
                 DispatchQueue.main.async { [weak self] in
@@ -238,10 +247,11 @@ final class AppState {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self, token == self.generation else { return }
-            let fullHTML = MarkdownParser.parseToHTML(content)
+            let (bodyHTML, fullHTML) = MarkdownParser.parseToHTML(content)
             DispatchQueue.main.async { [weak self] in
                 guard let self, token == self.generation else { return }
                 self.renderedHTML = fullHTML
+                self.renderedBodyHTML = bodyHTML
                 // Invalidate cache for this URL since content changed
                 if let url {
                     self.cachedContentHash.removeValue(forKey: url)
@@ -286,6 +296,7 @@ final class AppState {
         lastSavedContent = ""
         isFileDirty = false
         renderedHTML = ""
+        renderedBodyHTML = ""
     }
 
     func allAvailableFiles() -> [FileTreeItem] {

@@ -32,30 +32,50 @@ final class MarkdownTextStorage: NSTextStorage {
     override func processEditing() {
         super.processEditing()
         guard !suppressHighlighting else { return }
+
+        // Only re-highlight if something actually changed
+        guard editedRange.length > 0 else { return }
+
+        // For large files, limit highlighting to the changed area to avoid
+        // O(n) regex matching on the entire document. Expand the range to
+        // cover a few lines before and after the edit.
+        let text = backingStore.string as NSString
+        let lineRange = text.lineRange(for: editedRange)
+        let expandedRange = text.paragraphRange(for: lineRange)
+        // Limit expansion to avoid infinite loops
+        let highlightRange = NSRange(
+            location: max(0, expandedRange.location - 100),
+            length: min(text.length - expandedRange.location, expandedRange.length + 200)
+        )
+
         NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(applyHighlighting), object: nil)
-        perform(#selector(applyHighlighting), with: nil, afterDelay: 0.1)
+        perform(#selector(applyHighlighting), with: highlightRange, afterDelay: 0.1)
     }
 
-    @objc private func applyHighlighting() {
+    @objc private func applyHighlighting(_ range: NSRange? = nil) {
+        guard let range = range else { return }
+        
         // Reset foreground to dynamic NSColor.textColor which adapts to
         // light/dark mode automatically. Only .foregroundColor is touched —
         // .font is never set globally, preserving CJK font cascading.
-        backingStore.addAttribute(.foregroundColor, value: NSColor.textColor,
-                                  range: NSRange(location: 0, length: backingStore.length))
+        // Only reset the highlighted range, not the entire document.
+        backingStore.addAttribute(.foregroundColor, value: NSColor.textColor, range: range)
 
         let text = backingStore.string as NSString
         let length = text.length
-
+        
         guard length < 200_000 else { return }
 
-        highlightHeaders(in: text, length: length)
-        highlightBlockquotes(in: text, length: length)
-        highlightCodeBlocks(in: text, length: length)
-        highlightInlinePatterns(in: text, length: length)
+        // Only run regex on the limited range, not the entire document
+        highlightHeaders(in: text, length: length, range: range)
+        highlightBlockquotes(in: text, length: length, range: range)
+        highlightCodeBlocks(in: text, length: length, range: range)
+        highlightInlinePatterns(in: text, length: length, range: range)
 
+        // Only invalidateLayout for the limited range, not the entire document
         let fullRange = NSRange(location: 0, length: backingStore.length)
         for layoutManager in layoutManagers {
-            layoutManager.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
+            layoutManager.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
         }
     }
 
