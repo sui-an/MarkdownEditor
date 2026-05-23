@@ -85,7 +85,8 @@ struct ContentView: View {
     private var previewContent: some View {
         PreviewWebView(
             html: appState.renderedHTML,
-            hasFile: appState.currentFileURL != nil
+            hasFile: appState.currentFileURL != nil,
+            baseURL: appState.currentFileURL?.deletingLastPathComponent()
         )
             .frame(minWidth: 200)
     }

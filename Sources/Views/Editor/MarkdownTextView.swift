@@ -171,30 +171,29 @@ struct MarkdownTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
-        // Restore any image attachments to markdown before comparing text.
-        // Otherwise textView.string (with attachment placeholder chars) will
-        // never match the binding's clean markdown, causing attachment loss
-        // every time SwiftUI re-renders the view.
-        context.coordinator.suppressTextDidChange = true
+        // Compare using clean markdown (without mutating text storage) so the
+        // binding's clean text matches the text view's content regardless of
+        // whether images are currently displayed as attachments (\u{FFFC}) or
+        // as markdown source.
         if let storage = textView.textStorage {
-            context.coordinator.restoreImageAttachmentsToMarkdown(in: storage)
+            let cleanCurrent = context.coordinator.buildCleanMarkdown(from: storage)
+            if cleanCurrent == text {
+                context.coordinator.scheduleImageProcessing()
+                return
+            }
+        } else if textView.string == text {
+            context.coordinator.scheduleImageProcessing()
+            return
         }
-        let currentRaw = textView.string
-        context.coordinator.suppressTextDidChange = false
 
-        if currentRaw != text {
-            context.coordinator.suppressTextDidChange = true
-            let selectedRange = textView.selectedRange()
-            textView.string = text
-            let safeLocation = min(selectedRange.location, (text as NSString).length)
-            textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
-            context.coordinator.suppressTextDidChange = false
-            context.coordinator.scheduleImageProcessing()
-        } else {
-            // Text matches — just make sure base64 images are rendered
-            // (may have been cleared by a previous updateNSView pass)
-            context.coordinator.scheduleImageProcessing()
-        }
+        // Text content changed externally — replace in text view
+        context.coordinator.suppressTextDidChange = true
+        let selectedRange = textView.selectedRange()
+        textView.string = text
+        let safeLocation = min(selectedRange.location, (text as NSString).length)
+        textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
+        context.coordinator.suppressTextDidChange = false
+        context.coordinator.scheduleImageProcessing()
     }
 
     // MARK: - Coordinator
@@ -205,6 +204,16 @@ struct MarkdownTextView: NSViewRepresentable {
         var suppressTextDidChange = false
         var scrollObserver: Any?
         var textChangeObserver: Any?
+
+        /// Cache of decoded NSImages keyed by URL string. Avoids re-decoding
+        /// base64 images on every processInlineImages call (the biggest bottleneck
+        /// for files with embedded base64 images).
+        private static let imageCache: NSCache<NSString, NSImage> = {
+            let cache = NSCache<NSString, NSImage>()
+            cache.countLimit = 50
+            cache.totalCostLimit = 100 * 1024 * 1024  // 100 MB
+            return cache
+        }()
 
         private static let imageRegex: NSRegularExpression = {
             try! NSRegularExpression(
@@ -228,19 +237,36 @@ struct MarkdownTextView: NSViewRepresentable {
             guard !suppressTextDidChange,
                   let textView = notification.object as? NSTextView else { return }
 
-            // Restore any image attachments back to markdown source so
-            // the SwiftUI binding receives clean text (not attachment placeholder chars)
+            // Build clean markdown from attachment attributes WITHOUT mutating
+            // the text storage. This avoids the \u{FFFC} → base64 expansion
+            // on every keystroke that caused layout reflow and scroll-to-end.
             if let storage = textView.textStorage {
-                suppressTextDidChange = true
-                restoreImageAttachmentsToMarkdown(in: storage)
-                suppressTextDidChange = false
-            }
-
-            DispatchQueue.main.async {
-                self.parent.text = textView.string
+                let cleanText = buildCleanMarkdown(from: storage)
+                DispatchQueue.main.async {
+                    self.parent.text = cleanText
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.parent.text = textView.string
+                }
             }
 
             scheduleImageProcessing()
+        }
+
+        /// Enumerate \u{FFFC} attachment chars and replace them with their
+        /// markdown source strings WITHOUT modifying text storage. This is the
+        /// non-mutating counterpart of restoreImageAttachmentsToMarkdown.
+        func buildCleanMarkdown(from storage: NSTextStorage) -> String {
+            let fullRange = NSRange(location: 0, length: storage.length)
+            let result = NSMutableString(string: storage.string)
+            // Walk in reverse so ranges stay valid after string replacements
+            storage.enumerateAttribute(.attachment, in: fullRange, options: .reverse) { value, range, _ in
+                if let attachment = value as? MarkdownImageAttachment, !attachment.markdownSource.isEmpty {
+                    result.replaceCharacters(in: range, with: attachment.markdownSource)
+                }
+            }
+            return result as String
         }
 
         // MARK: - Inline Image Processing
@@ -261,7 +287,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
         @objc private func processInlineImages() {
             guard let textView = textView,
-                  let textStorage = textView.textStorage else { return }
+                  let textStorage = textView.textStorage as? MarkdownTextStorage else { return }
 
             let text = textStorage.string
             let nsString = text as NSString
@@ -271,11 +297,16 @@ struct MarkdownTextView: NSViewRepresentable {
             guard !matches.isEmpty else { return }
 
             suppressTextDidChange = true
-            defer {
-                DispatchQueue.main.async {
-                    self.suppressTextDidChange = false
-                }
-            }
+
+            // Suppress syntax highlighting during attachment replacements to avoid
+            // cascading regex re-highlight on every textStorage mutation.
+            textStorage.suppressHighlighting = true
+
+            // Batch all replacements into a single layout pass to prevent the
+            // content "jump" caused by sequential text storage mutations.
+            textStorage.beginEditing()
+
+            var didReplace = false
 
             for match in matches.reversed() {
                 let fullMatchRange = match.range(at: 0)
@@ -286,12 +317,23 @@ struct MarkdownTextView: NSViewRepresentable {
                       urlRange.length > 0 else { continue }
 
                 let urlStr = nsString.substring(with: urlRange)
+                let cacheKey = urlStr as NSString
+
+                // Check cache first — avoids re-decoding base64 every time
+                if let cached = Self.imageCache.object(forKey: cacheKey) {
+                    let attachment = MarkdownImageAttachment()
+                    attachment.markdownSource = nsString.substring(with: fullMatchRange)
+                    attachment.image = cached
+                    attachment.bounds = NSRect(x: 0, y: 0, width: cached.size.width, height: cached.size.height)
+                    let attrString = NSAttributedString(attachment: attachment)
+                    textStorage.replaceCharacters(in: fullMatchRange, with: attrString)
+                    didReplace = true
+                    continue
+                }
 
                 guard let image = loadImage(from: urlStr) else { continue }
 
-                let attachment = MarkdownImageAttachment()
-                attachment.markdownSource = nsString.substring(with: fullMatchRange)
-
+                // Resize for display
                 let maxWidth: CGFloat = 400
                 let maxHeight: CGFloat = 300
                 var size = image.size
@@ -309,16 +351,31 @@ struct MarkdownTextView: NSViewRepresentable {
                            operation: .copy, fraction: 1.0)
                 displayImage.unlockFocus()
 
+                // Store in cache for next time
+                Self.imageCache.setObject(displayImage, forKey: cacheKey, cost: Int(size.width * size.height * 4))
+
+                let attachment = MarkdownImageAttachment()
+                attachment.markdownSource = nsString.substring(with: fullMatchRange)
                 attachment.image = displayImage
                 attachment.bounds = NSRect(x: 0, y: 0, width: size.width, height: size.height)
 
                 let attrString = NSAttributedString(attachment: attachment)
                 textStorage.replaceCharacters(in: fullMatchRange, with: attrString)
+                didReplace = true
             }
 
-            let updatedRange = NSRange(location: 0, length: textStorage.length)
-            for layoutManager in textStorage.layoutManagers {
-                layoutManager.invalidateLayout(forCharacterRange: updatedRange, actualCharacterRange: nil)
+            textStorage.endEditing()
+            textStorage.suppressHighlighting = false
+
+            if didReplace {
+                let updatedRange = NSRange(location: 0, length: textStorage.length)
+                for layoutManager in textStorage.layoutManagers {
+                    layoutManager.invalidateLayout(forCharacterRange: updatedRange, actualCharacterRange: nil)
+                }
+            }
+
+            DispatchQueue.main.async {
+                self.suppressTextDidChange = false
             }
         }
 
@@ -374,10 +431,15 @@ struct MarkdownTextView: NSViewRepresentable {
                 return
             }
 
-            guard let textView = self.textView else { return }
+            guard let textView = self.textView,
+                  let storage = textView.textStorage else { return }
 
+            // Use clean markdown from attachments (not textView.string which
+            // has \u{FFFC} after processInlineImages ran) so that subsequent
+            // pastes correctly include previous images' markdown syntax.
+            let clean = buildCleanMarkdown(from: storage)
             let cursor = textView.selectedRange().location
-            let current = textView.string as NSString
+            let current = clean as NSString
 
             var insertion = result.markdownSyntax
             if cursor > 0 && current.length > 0 {
@@ -395,17 +457,19 @@ struct MarkdownTextView: NSViewRepresentable {
                 insertion = insertion + "\n"
             }
 
-            let updated = current as String
-            let newText = (updated as NSString).replacingCharacters(in: NSRange(location: cursor, length: 0), with: insertion)
+            let newText = (clean as NSString).replacingCharacters(in: NSRange(location: cursor, length: 0), with: insertion)
             let insertEnd = cursor + (insertion as NSString).length
 
             suppressTextDidChange = true
             textView.string = newText
+            // Process immediately so images appear in the same frame.
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(self.processInlineImages), object: nil)
+            processInlineImages()
             textView.setSelectedRange(NSRange(location: insertEnd, length: 0))
             suppressTextDidChange = false
+
             DispatchQueue.main.async {
                 self.parent.text = newText
-                self.scheduleImageProcessing()
             }
         }
 

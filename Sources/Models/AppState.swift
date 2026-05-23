@@ -1,19 +1,14 @@
 import Foundation
 import Observation
 import AppKit
-import CryptoKit
 
 // MARK: - HTML Cache Entry
 
 private final class CachedHTML {
     let html: String
-    let bodyHTML: String   // cached body fragment for fast re-wrap
-    let mermaidBlocks: Int
 
-    init(html: String, bodyHTML: String, mermaidBlocks: Int) {
+    init(html: String) {
         self.html = html
-        self.bodyHTML = bodyHTML
-        self.mermaidBlocks = mermaidBlocks
     }
 }
 
@@ -153,11 +148,11 @@ final class AppState {
         selectedFileURL = url
         currentFileURL = url
 
-        // Try cache FIRST (synchronous, instant)
-        let contentHash = quickHashForCacheCheck(url: url)
+        // Try cache FIRST (synchronous — file is already known to exist and
+        // unchanged, so read is near-instant from the OS page cache).
+        let cacheKey = quickHashForCacheCheck(url: url)
         if let cached = htmlCache.object(forKey: url as NSURL),
-           cachedContentHash[url] == contentHash {
-            // Cache hit! Display immediately.
+           cachedContentHash[url] == cacheKey {
             currentFileContent = FileService.readFileCached(at: url)
             lastSavedContent = currentFileContent
             isFileDirty = false
@@ -172,7 +167,6 @@ final class AppState {
 
             do {
                 let content = try FileService.readFile(at: url)
-                let hash = self.contentHash(of: content)
 
                 // Push content to editor immediately (don't wait for HTML)
                 DispatchQueue.main.async { [weak self] in
@@ -183,9 +177,9 @@ final class AppState {
                     self.isLoadingFile = false
                 }
 
-                // Check cache again with content hash (may have been cached by another path)
+                // Check cache again (may have been cached by another window since outer check)
                 if let cached = self.htmlCache.object(forKey: url as NSURL),
-                   self.cachedContentHash[url] == hash {
+                   self.cachedContentHash[url] == cacheKey {
                     DispatchQueue.main.async { [weak self] in
                         guard let self, token == self.generation else { return }
                         self.renderedHTML = cached.html
@@ -193,18 +187,14 @@ final class AppState {
                     return
                 }
 
-                // Generate HTML on background
-                let bodyHTML = MarkdownParser.parseToHTMLBody(content)
+                // Generate full HTML on background (single call — no duplicate parsing)
                 let fullHTML = MarkdownParser.parseToHTML(content)
-
-                // Count mermaid blocks for cache key differentiation
-                let mermaidCount = bodyHTML.components(separatedBy: "class=\"mermaid\"").count - 1
 
                 DispatchQueue.main.async { [weak self] in
                     guard let self, token == self.generation else { return }
-                    let cached = CachedHTML(html: fullHTML, bodyHTML: bodyHTML, mermaidBlocks: mermaidCount)
+                    let cached = CachedHTML(html: fullHTML)
                     self.htmlCache.setObject(cached, forKey: url as NSURL, cost: fullHTML.utf8.count)
-                    self.cachedContentHash[url] = hash
+                    self.cachedContentHash[url] = cacheKey
                     self.renderedHTML = fullHTML
                 }
             } catch {
@@ -314,11 +304,6 @@ final class AppState {
               let modDate = attrs[.modificationDate] as? Date,
               let size = attrs[.size] as? Int else { return "" }
         return "\(size):\(Int(modDate.timeIntervalSince1970))"
-    }
-
-    private func contentHash(of text: String) -> String {
-        guard let data = text.data(using: .utf8) else { return "" }
-        return SHA256.hash(data: data).compactMap { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - File System Changes

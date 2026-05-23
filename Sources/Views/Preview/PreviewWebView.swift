@@ -42,6 +42,40 @@ final class WebViewPool {
             config.userContentController.addUserScript(script)
         }
 
+        // Convert data URI images to Blob URLs — WKWebView may struggle with
+        // very long base64 data URIs loaded via loadHTMLString.
+        let blobScriptSrc = """
+        (function() {
+            function fixDataURIs() {
+                document.querySelectorAll('img[src^="data:"]').forEach(function(img) {
+                    try {
+                        var src = img.src;
+                        var comma = src.indexOf(',');
+                        if (comma === -1) return;
+                        var mime = src.substring(5, comma).split(';')[0];
+                        var raw = src.substring(comma + 1);
+                        var binary = atob(raw);
+                        var bytes = new Uint8Array(binary.length);
+                        for (var i = 0; i < binary.length; i++) {
+                            bytes[i] = binary.charCodeAt(i);
+                        }
+                        var blob = new Blob([bytes], {type: mime});
+                        img.src = URL.createObjectURL(blob);
+                    } catch(e) {
+                        // keep original src
+                    }
+                });
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', fixDataURIs);
+            } else {
+                fixDataURIs();
+            }
+        })();
+        """
+        let blobScript = WKUserScript(source: blobScriptSrc, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+        config.userContentController.addUserScript(blobScript)
+
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         webView.wantsLayer = true
@@ -66,6 +100,10 @@ private func findScrollView(in view: NSView) -> NSScrollView? {
 struct PreviewWebView: NSViewRepresentable {
     let html: String
     let hasFile: Bool
+    /// Non-nil when a file is open — WKWebView loads HTML with the file's
+    /// directory as baseURL so data URIs have a non-opaque security origin
+    /// (known WebKit issue: data URIs may fail to load with baseURL: nil).
+    let baseURL: URL?
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -105,8 +143,8 @@ struct PreviewWebView: NSViewRepresentable {
         context.coordinator.lastLoadedHTML = html
 
         context.coordinator.debounceWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak webView, html] in
-            webView?.loadHTMLString(html, baseURL: nil)
+        let workItem = DispatchWorkItem { [weak webView, html, baseURL] in
+            webView?.loadHTMLString(html, baseURL: baseURL)
         }
         context.coordinator.debounceWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)

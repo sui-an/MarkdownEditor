@@ -3,6 +3,10 @@ import AppKit
 final class MarkdownTextStorage: NSTextStorage {
     private let backingStore = NSMutableAttributedString()
 
+    /// Set to true during image-attachment replacement to avoid
+    /// cascading regex highlighting on every NSTextStorage mutation.
+    var suppressHighlighting = false
+
     override var string: String {
         backingStore.string
     }
@@ -27,6 +31,7 @@ final class MarkdownTextStorage: NSTextStorage {
 
     override func processEditing() {
         super.processEditing()
+        guard !suppressHighlighting else { return }
         NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(applyHighlighting), object: nil)
         perform(#selector(applyHighlighting), with: nil, afterDelay: 0.1)
     }

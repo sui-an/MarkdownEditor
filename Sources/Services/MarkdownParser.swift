@@ -17,6 +17,49 @@ enum MarkdownParser {
 
     // MARK: - Public API
 
+    /// cmark-gfm imposes a 4096-byte URL limit, easily exceeded by base64
+    /// data URIs. Convert `![alt](data:image/...;base64,...)` to raw `<img>`
+    /// HTML so cmark-gfm passes it through unchanged.
+    private static let base64ImageRegex: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: #"!\[([^\]]*)\]\((data:image/[^;]+;base64,[A-Za-z0-9+/=]+)\)"#,
+            options: []
+        )
+    }()
+
+    private static func preprocessBase64Images(_ markdown: String) -> String {
+        let nsString = markdown as NSString
+        let range = NSRange(location: 0, length: nsString.length)
+        var result = ""
+        var lastEnd = 0
+
+        for match in base64ImageRegex.matches(in: markdown, range: range) {
+            let fullRange = match.range(at: 0)
+            let altRange = match.range(at: 1)
+            let urlRange = match.range(at: 2)
+
+            result += nsString.substring(with: NSRange(location: lastEnd, length: fullRange.location - lastEnd))
+
+            let alt = nsString.substring(with: altRange)
+            let url = nsString.substring(with: urlRange)
+            // HTML-escape alt text
+            let escapedAlt = alt
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+            result += "<img src=\"\(url)\" alt=\"\(escapedAlt)\">"
+
+            lastEnd = fullRange.location + fullRange.length
+        }
+
+        if lastEnd < nsString.length {
+            result += nsString.substring(with: NSRange(location: lastEnd, length: nsString.length - lastEnd))
+        }
+
+        return result
+    }
+
     /// Parse markdown to full HTML document. Thread-safe.
     static func parseToHTML(_ markdown: String) -> String {
         #if canImport(CCmarkGfm)
@@ -24,7 +67,9 @@ enum MarkdownParser {
         #endif
 
         let mermaidResult = extractMermaidBlocks(markdown)
-        let bodyHTML = renderBody(mermaidResult.text)
+        // Pre-process base64 data URIs before cmark-gfm (avoids 4096-byte URL limit)
+        let preprocessed = preprocessBase64Images(mermaidResult.text)
+        let bodyHTML = renderBody(preprocessed)
         let finalBody = reinsertMermaidBlocks(bodyHTML, mermaidResult)
 
         let css = Self.previewCSS
@@ -41,14 +86,15 @@ enum MarkdownParser {
     }
 
     /// Parse markdown to HTML body fragment only (no wrapper, no CSS).
-    /// Used for caching the expensive cmark part.
     static func parseToHTMLBody(_ markdown: String) -> String {
         #if canImport(CCmarkGfm)
         ensureGFMExtensions()
         #endif
 
         let mermaidResult = extractMermaidBlocks(markdown)
-        let bodyHTML = renderBody(mermaidResult.text)
+        // Pre-process base64 data URIs before cmark-gfm (avoids 4096-byte URL limit)
+        let preprocessed = preprocessBase64Images(mermaidResult.text)
+        let bodyHTML = renderBody(preprocessed)
         return reinsertMermaidBlocks(bodyHTML, mermaidResult)
     }
 
@@ -58,7 +104,9 @@ enum MarkdownParser {
     private static func renderBody(_ markdown: String) -> String {
         guard let cstr = markdown.cString(using: .utf8) else { return fallbackRenderBody(markdown) }
         let len = strlen(cstr)
-        let options = CMARK_OPT_DEFAULT
+        // CMARK_OPT_UNSAFE prevents cmark-gfm from filtering/escaping raw HTML
+        // (needed for our pre-processed <img src="data:..."> tags).
+        let options = CMARK_OPT_DEFAULT | CMARK_OPT_UNSAFE
 
         guard let parser = cmark_parser_new(options) else {
             return fallbackRenderBody(markdown)

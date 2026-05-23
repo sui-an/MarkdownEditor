@@ -10,6 +10,8 @@ enum ImageHandler {
         let errorMessage: String?
     }
 
+    /// Embed dragged-in image file as base64 data URI in markdown.
+    /// No external assets folder needed — the .md file is self-contained.
     static func handleDroppedFile(_ fileURL: URL, relativeTo mdFileURL: URL) -> InsertResult {
         guard let utType = UTType(filenameExtension: fileURL.pathExtension.lowercased()),
               utType.conforms(to: .image) else {
@@ -19,17 +21,20 @@ enum ImageHandler {
 
         do {
             let data = try Data(contentsOf: fileURL)
-            let ext = preferredExtension(for: fileURL.pathExtension)
-            let savedURL = try FileService.saveImage(data, extension: ext, relativeTo: mdFileURL)
-            let relPath = FileService.relativePath(from: mdFileURL, to: savedURL)
+            let base64 = data.base64EncodedString()
+            let mimeType = utType.preferredMIMEType ?? "image/\(fileURL.pathExtension.lowercased())"
             let alt = fileURL.deletingPathExtension().lastPathComponent
-            return InsertResult(markdownSyntax: "![\(alt)](\(relPath))", success: true, errorMessage: nil)
+            return InsertResult(
+                markdownSyntax: "![\(alt)](data:\(mimeType);base64,\(base64))",
+                success: true, errorMessage: nil)
         } catch {
             return InsertResult(markdownSyntax: "", success: false,
-                                errorMessage: "Failed to save image: \(error.localizedDescription)")
+                                errorMessage: "Failed to read image: \(error.localizedDescription)")
         }
     }
 
+    /// Convert pasted NSImage to base64 PNG data URI.
+    /// No external assets folder needed — the .md file is self-contained.
     static func handlePastedImage(_ image: NSImage, relativeTo mdFileURL: URL) -> InsertResult {
         guard let tiffData = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiffData),
@@ -38,25 +43,11 @@ enum ImageHandler {
                                 errorMessage: "Failed to convert image to PNG.")
         }
 
-        do {
-            let savedURL = try FileService.saveImage(pngData, extension: "png", relativeTo: mdFileURL)
-            let relPath = FileService.relativePath(from: mdFileURL, to: savedURL)
-            return InsertResult(markdownSyntax: "![image](\(relPath))", success: true, errorMessage: nil)
-        } catch {
-            return InsertResult(markdownSyntax: "", success: false,
-                                errorMessage: "Failed to save image: \(error.localizedDescription)")
-        }
+        let base64 = pngData.base64EncodedString()
+        return InsertResult(
+            markdownSyntax: "![image](data:image/png;base64,\(base64))",
+            success: true, errorMessage: nil)
     }
 
     static let supportedImageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "heic"]
-
-    private static func preferredExtension(for ext: String) -> String {
-        let lower = ext.lowercased()
-        switch lower {
-        case "jpeg": return "jpg"
-        case "tiff": return "png"
-        case "heic": return "png"
-        default: return lower
-        }
-    }
 }
