@@ -87,7 +87,9 @@ struct ContentView: View {
             html: appState.renderedHTML,
             bodyHTML: appState.renderedBodyHTML,
             hasFile: appState.currentFileURL != nil,
-            baseURL: appState.currentFileURL?.deletingLastPathComponent()
+            baseURL: appState.currentFileURL?.deletingLastPathComponent(),
+            fileURL: appState.currentFileURL,
+            fileID: appState.selectedFileID
         )
             .frame(minWidth: 200)
     }

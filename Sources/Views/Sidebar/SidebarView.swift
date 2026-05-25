@@ -26,8 +26,7 @@ struct SidebarView: View {
                     ForEach(appState.openFiles) { item in
                         FileRowView(
                             item: item,
-                            isSelected: appState.selectedFileID == item.id,
-                            onSelect: { appState.selectFile(id: item.id) }
+                            isSelected: appState.selectedFileID == item.id
                         )
                         .contextMenu {
                             Button("Close") {
@@ -52,8 +51,7 @@ struct SidebarView: View {
                 ForEach(folder.allMarkdownFiles) { file in
                     FileRowView(
                         item: file,
-                        isSelected: appState.selectedFileID == file.id,
-                        onSelect: { appState.selectFile(id: file.id) }
+                        isSelected: appState.selectedFileID == file.id
                     )
                     .padding(.leading, 4)
                     .contextMenu {
@@ -66,6 +64,10 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .frame(minWidth: 180)
+        .onChange(of: appState.selectedFileID) { _, newValue in
+            guard let id = newValue else { return }
+            appState.selectFile(id: id)
+        }
     }
 
     private func openFileDialog() {

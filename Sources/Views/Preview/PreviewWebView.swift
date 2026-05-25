@@ -2,35 +2,130 @@ import SwiftUI
 import WebKit
 import AppKit
 
-// MARK: - Shared WebView pool
+// MARK: - Per-WebView state + navigation delegate
 
-final class WebViewPool {
-    static let shared = WebViewPool()
+final class WebViewState: NSObject, WKNavigationDelegate {
+    var templateReady = false
+    var needsScrollReset = false
+    var lastBodyHTML = ""
+    var hasLoadedContent = false
+    private var scrollerConfigured = false
 
-    private var preWarmedView: WKWebView?
-
-    func dequeue() -> WKWebView {
-        if let view = preWarmedView {
-            preWarmedView = nil
-            return view
+    func configureScrollView(_ webView: WKWebView) {
+        guard !scrollerConfigured else { return }
+        scrollerConfigured = true
+        if let sv = findScrollView(in: webView) {
+            sv.scrollerStyle = .overlay
+            sv.verticalScrollElasticity = .none
+            sv.horizontalScrollElasticity = .none
         }
-        return createWebView()
     }
 
-    func enqueue(_ webView: WKWebView?) {
-        guard let webView else { return }
-        webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
-        webView.navigationDelegate = nil
-        findScrollView(in: webView)?.scrollerStyle = .overlay
-        preWarmedView?.loadHTMLString("<html><body></body></html>", baseURL: nil)
-        preWarmedView = webView
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        templateReady = true
+        // If body content was already saved before the template finished loading
+        // (e.g. re-attaching a cached WebView where content had been generated),
+        // inject it now so the preview isn't blank.
+        if !lastBodyHTML.isEmpty {
+            updateBodyViaJS(webView, bodyHTML: lastBodyHTML)
+        }
+        webView.evaluateJavaScript("""
+        if (typeof mermaid !== 'undefined') { mermaid.run({ querySelector: '.mermaid' }); }
+        if (typeof hljs !== 'undefined') { hljs.highlightAll(); }
+        """)
+        if needsScrollReset {
+            needsScrollReset = false
+            webView.evaluateJavaScript("window.scrollTo(0, 0)")
+        }
     }
 
-    func preWarm() {
-        guard preWarmedView == nil else { return }
-        let view = createWebView()
-        view.loadHTMLString("<html><body></body></html>", baseURL: nil)
-        preWarmedView = view
+    func updateBodyViaJS(_ webView: WKWebView, bodyHTML: String) {
+        guard let encoded = try? JSONEncoder().encode(bodyHTML),
+              let jsonStr = String(data: encoded, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("""
+        document.getElementById('md-content').innerHTML = \(jsonStr);
+        if (typeof hljs !== 'undefined') hljs.highlightAll();
+        if (typeof mermaid !== 'undefined') mermaid.run({ querySelector: '.mermaid' });
+        """)
+    }
+
+    func updateBaseURL(_ webView: WKWebView, baseURL: URL?) {
+        guard let baseURLStr = baseURL?.absoluteString else { return }
+        let escaped = (try? JSONEncoder().encode(baseURLStr))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? baseURLStr
+        webView.evaluateJavaScript("""
+        var oldBase = document.querySelector('base');
+        if (oldBase) oldBase.remove();
+        var base = document.createElement('base');
+        base.href = \(escaped);
+        document.head.appendChild(base);
+        """)
+    }
+}
+
+// MARK: - WebView cache (per-fileID)
+
+final class WebViewCache {
+    static let shared = WebViewCache()
+
+    private var cache: [UUID: WKWebView] = [:]
+    private var states: [ObjectIdentifier: WebViewState] = [:]
+    private var urlToFileID: [URL: UUID] = [:]
+    private var accessOrder: [UUID] = []
+    private let maxEntries = 10
+
+    /// Returns the WebView (and its state) for the given fileID.
+    /// Creates a new WebView on first access. LRU evicts when over limit.
+    func webView(for fileID: UUID, url: URL) -> (WKWebView, WebViewState) {
+        urlToFileID[url] = fileID
+
+        if let existing = cache[fileID] {
+            touch(fileID)
+            return (existing, state(for: existing))
+        }
+
+        let webView = createWebView()
+        let state = WebViewState()
+        webView.navigationDelegate = state
+
+        cache[fileID] = webView
+        states[ObjectIdentifier(webView)] = state
+        accessOrder.append(fileID)
+
+        if accessOrder.count > maxEntries {
+            evictOldest()
+        }
+
+        return (webView, state)
+    }
+
+    /// Remove cached WebView by fileID (file closed).
+    func remove(for fileID: UUID) {
+        guard let webView = cache.removeValue(forKey: fileID) else { return }
+        states.removeValue(forKey: ObjectIdentifier(webView))
+        accessOrder.removeAll { $0 == fileID }
+        urlToFileID = urlToFileID.filter { $0.value != fileID }
+    }
+
+    /// Remove cached WebView by file URL.
+    func removeWebView(for url: URL) {
+        guard let fileID = urlToFileID[url] else { return }
+        remove(for: fileID)
+    }
+
+    private func touch(_ fileID: UUID) {
+        accessOrder.removeAll { $0 == fileID }
+        accessOrder.append(fileID)
+    }
+
+    private func evictOldest() {
+        guard accessOrder.count > maxEntries else { return }
+        let oldest = accessOrder.removeFirst()
+        remove(for: oldest)
+    }
+
+    private func state(for webView: WKWebView) -> WebViewState {
+        states[ObjectIdentifier(webView)]!
     }
 
     private func createWebView() -> WKWebView {
@@ -43,9 +138,7 @@ final class WebViewPool {
             config.userContentController.addUserScript(script)
         }
 
-        // mermaid.min.js — injected once (not inlined in every HTML string).
-        // This saves ~3.3MB per preview update and is required for incremental
-        // DOM updates where inline scripts from loadHTMLString never run.
+        // mermaid.min.js — injected once, persists across incremental DOM updates.
         if let mmdPath = Bundle.main.path(forResource: "mermaid.min", ofType: "js"),
            let mmdJS = try? String(contentsOfFile: mmdPath) {
             let script = WKUserScript(source: mmdJS, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
@@ -63,17 +156,14 @@ final class WebViewPool {
                         var comma = src.indexOf(',');
                         if (comma === -1) return;
                         var mime = src.substring(5, comma).split(';')[0];
-                        var raw = src.substring(comma + 1);
-                        var binary = atob(raw);
+                        var binary = atob(src.substring(comma + 1));
                         var bytes = new Uint8Array(binary.length);
                         for (var i = 0; i < binary.length; i++) {
                             bytes[i] = binary.charCodeAt(i);
                         }
                         var blob = new Blob([bytes], {type: mime});
                         img.src = URL.createObjectURL(blob);
-                    } catch(e) {
-                        // keep original src
-                    }
+                    } catch(e) {}
                 });
             }
             if (document.readyState === 'loading') {
@@ -89,12 +179,101 @@ final class WebViewPool {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         webView.wantsLayer = true
-        findScrollView(in: webView)?.scrollerStyle = .overlay
+        if let sv = findScrollView(in: webView) {
+            sv.scrollerStyle = .overlay
+        }
 
         return webView
     }
+}
 
-    func handleMemoryPressure() { preWarmedView = nil }
+// MARK: - PreviewWebView
+
+struct PreviewWebView: NSViewRepresentable {
+    /// Full HTML document (template + body) — used for first load.
+    let html: String
+    /// Body-only HTML fragment — used for incremental DOM updates via JS.
+    let bodyHTML: String
+    let hasFile: Bool
+    /// The file's parent directory — WKWebView baseURL for resolving relative resources.
+    let baseURL: URL?
+    /// The actual file URL — used as cache key for per-document WebView lookup.
+    let fileURL: URL?
+    let fileID: UUID?
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        v.wantsLayer = true
+        return v
+    }
+
+    func updateNSView(_ container: NSView, context: Context) {
+        guard hasFile, let fileID, let fileURL else {
+            if !container.subviews.isEmpty {
+                container.subviews.forEach { $0.removeFromSuperview() }
+            }
+            context.coordinator.currentWebView = nil
+            return
+        }
+
+        let (webView, state) = WebViewCache.shared.webView(for: fileID, url: fileURL)
+
+        if context.coordinator.currentWebView !== webView {
+            // Add new WebView FIRST, then remove old ones — avoids a blank
+            // container flash while the old subview is missing.
+            context.coordinator.currentWebView = webView
+
+            state.configureScrollView(webView)
+            webView.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(webView)
+            NSLayoutConstraint.activate([
+                webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                webView.topAnchor.constraint(equalTo: container.topAnchor),
+                webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            ])
+
+            container.subviews.filter { $0 !== webView }.forEach { $0.removeFromSuperview() }
+
+            if state.hasLoadedContent {
+                // WebView already has the template loaded — avoid loadHTMLString
+                // (which causes a WKWebView page-reload flash). Just inject the body.
+                if !bodyHTML.isEmpty {
+                    state.lastBodyHTML = bodyHTML
+                    state.updateBodyViaJS(webView, bodyHTML: bodyHTML)
+                }
+            } else if !html.isEmpty {
+                state.hasLoadedContent = true
+                state.needsScrollReset = true
+                webView.loadHTMLString(html, baseURL: baseURL)
+            }
+        } else {
+            if state.hasLoadedContent {
+                if !bodyHTML.isEmpty && bodyHTML != state.lastBodyHTML {
+                    state.lastBodyHTML = bodyHTML
+                    state.updateBodyViaJS(webView, bodyHTML: bodyHTML)
+                }
+            } else if !html.isEmpty {
+                state.hasLoadedContent = true
+                state.needsScrollReset = true
+                webView.loadHTMLString(html, baseURL: baseURL)
+            }
+        }
+    }
+
+    static func dismantleNSView(_ container: NSView, coordinator: Coordinator) {
+        // WebView lifecycle is managed by WebViewCache.
+        // Just detach from the container — the WebView stays alive for
+        // later re-use when the user switches back to this file.
+        container.subviews.forEach { $0.removeFromSuperview() }
+        coordinator.currentWebView = nil
+    }
+
+    final class Coordinator {
+        var currentWebView: WKWebView?
+    }
 }
 
 private func findScrollView(in view: NSView) -> NSScrollView? {
@@ -103,160 +282,4 @@ private func findScrollView(in view: NSView) -> NSScrollView? {
         if let found = findScrollView(in: sub) { return found }
     }
     return nil
-}
-
-// MARK: - PreviewWebView
-
-struct PreviewWebView: NSViewRepresentable {
-    /// Full HTML document (template + body) — used for initial loadHTMLString
-    /// and on file switches where a fresh page load is required.
-    let html: String
-    /// Body-only HTML fragment — used for incremental DOM updates via JS
-    /// after the template has been loaded once. Avoids full WKWebView page
-    /// rebuild (DOM reparse, script re-execution, scroll position loss).
-    let bodyHTML: String
-    let hasFile: Bool
-    /// Non-nil when a file is open — WKWebView loads HTML with the file's
-    /// directory as baseURL so data URIs have a non-opaque security origin
-    /// (known WebKit issue: data URIs may fail to load with baseURL: nil).
-    let baseURL: URL?
-    
-    var onScrollReset: (() -> Void)?
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeNSView(context: Context) -> ClipContainer {
-        let container = ClipContainer()
-        container.wantsLayer = true
-        container.layer?.masksToBounds = true
-
-        let webView = WebViewPool.shared.dequeue()
-        webView.navigationDelegate = context.coordinator
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(webView)
-        NSLayoutConstraint.activate([
-            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            webView.topAnchor.constraint(equalTo: container.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-
-        context.coordinator.configureScrollView(webView)
-        context.coordinator.onScrollReset = { [weak webView] in
-            webView?.evaluateJavaScript("window.scrollTo(0, 0)")
-        }
-        return container
-    }
-
-    func updateNSView(_ container: ClipContainer, context: Context) {
-        guard let webView = container.subviews.first as? WKWebView else { return }
-        context.coordinator.configureScrollView(webView)
-
-        guard hasFile else {
-            if context.coordinator.templateReady {
-                context.coordinator.templateReady = false
-                context.coordinator.lastBodyHTML = ""
-                webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
-            }
-            return
-        }
-
-        guard bodyHTML != context.coordinator.lastBodyHTML else { return }
-        context.coordinator.lastBodyHTML = bodyHTML
-
-        // Reset file switching flag after first update (only for file switches)
-        context.coordinator.isFileSwitching = false
-
-        // For file switching, use 0ms delay to show content immediately.
-        // For typing updates, use 100ms debounce to avoid flicker.
-        let delay: TimeInterval = context.coordinator.isFileSwitching ? 0 : 0.1
-
-        context.coordinator.debounceWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak webView, bodyHTML, html, baseURL, coordinator = context.coordinator] in
-            guard let webView else { return }
-
-            if coordinator.templateReady && coordinator.lastBaseURL == baseURL {
-                // Template cached — incremental DOM update via JS
-                // This preserves scroll position (don't reset)
-                coordinator.updateBodyViaJS(webView, bodyHTML: bodyHTML)
-            } else {
-                // First load or file switch — use loadHTMLString
-                // This resets scroll position to top
-                coordinator.lastBaseURL = baseURL
-                webView.loadHTMLString(html, baseURL: baseURL)
-            }
-        }
-        context.coordinator.debounceWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
-    }
-
-    static func dismantleNSView(_ container: ClipContainer, coordinator: Coordinator) {
-        guard let webView = container.subviews.first as? WKWebView else { return }
-        webView.removeFromSuperview()
-        coordinator.debounceWorkItem?.cancel()
-        coordinator.debounceWorkItem = nil
-        coordinator.lastBodyHTML = ""
-        coordinator.templateReady = false
-        coordinator.lastBaseURL = nil
-        WebViewPool.shared.enqueue(webView)
-    }
-
-    final class Coordinator: NSObject, WKNavigationDelegate {
-        var lastBodyHTML: String = ""
-        var lastBaseURL: URL?
-        var templateReady = false
-        var isFileSwitching = false
-        var debounceWorkItem: DispatchWorkItem?
-        var scrollerConfigured = false
-        var onScrollReset: (() -> Void)?
-
-        func configureScrollView(_ webView: WKWebView) {
-            guard !scrollerConfigured else { return }
-            scrollerConfigured = true
-            if let sv = findScrollView(in: webView) {
-                sv.scrollerStyle = .overlay
-                sv.verticalScrollElasticity = .none
-                sv.horizontalScrollElasticity = .none
-            }
-        }
-
-        /// Reset preview scroll position to top.
-        func resetScrollPosition() {
-            onScrollReset?()
-        }
-
-        /// Replace content div innerHTML and re-apply highlight.js + mermaid.
-        /// JSON-encoding the HTML guarantees safe JavaScript string escaping.
-        func updateBodyViaJS(_ webView: WKWebView, bodyHTML: String) {
-            guard let encoded = try? JSONEncoder().encode(bodyHTML),
-                  let jsonStr = String(data: encoded, encoding: .utf8) else {
-                return
-            }
-            webView.evaluateJavaScript("""
-            document.getElementById('md-content').innerHTML = \(jsonStr);
-            if (typeof hljs !== 'undefined') hljs.highlightAll();
-            if (typeof mermaid !== 'undefined') mermaid.run({ querySelector: '.mermaid' });
-            """)
-        }
-
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            templateReady = true
-            // Run highlight.js and mermaid on the initial content.
-            webView.evaluateJavaScript("""
-            if (typeof mermaid !== 'undefined') {
-                mermaid.run({ querySelector: '.mermaid' });
-            }
-            if (typeof hljs !== 'undefined') {
-                hljs.highlightAll();
-            }
-            """)
-        }
-    }
-}
-
-// MARK: - Clip container
-
-final class ClipContainer: NSView {
 }

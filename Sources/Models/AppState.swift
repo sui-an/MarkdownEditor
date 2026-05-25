@@ -27,15 +27,25 @@ final class AppState {
     /// Body-only HTML for incremental preview DOM updates (avoids WKWebView
     /// full-page reload via loadHTMLString on every keystroke).
     var renderedBodyHTML: String = ""
-    /// Callback to reset scroll positions when switching files.
-    var onFileSwitch: (() -> Void)?
-    var isFileSwitching: Bool = false
     var isFileDirty: Bool = false
     var isLoadingFile: Bool = false
 
     private var folderWatchers: [UUID: FolderWatcher] = [:]
     private var selectedFileURL: URL?
     private var lastSavedContent: String = ""
+
+    // MARK: - In-memory file content cache
+
+    /// All open file contents kept in memory so switching tabs requires zero disk IO.
+    /// Populated by loadFileContent, updated by user edits, evicted on file close.
+    private var fileContents: [URL: String] = [:]
+    /// LRU access order for fileContents eviction (most recent at end).
+    private var fileContentAccessOrder: [URL] = []
+    /// Maximum entries in fileContents — matches htmlCache countLimit.
+    private let fileContentCacheLimit = 20
+    /// Content hash of the last saved/loaded version for each file.
+    /// Used to detect external file modifications (via folder watcher).
+    private var fileSavedHashes: [URL: String] = [:]
 
     // MARK: - Performance: HTML cache + operation cancellation
 
@@ -52,6 +62,13 @@ final class AppState {
     /// Content hash of the last cached version for a given URL. Avoids re-parsing
     /// when content hasn't actually changed (e.g. switching tabs).
     private var cachedContentHash: [URL: String] = [:]
+
+    /// Secondary HTML cache — deterministic LRU, NOT affected by memory pressure
+    /// (unlike NSCache which may purge entries at any time). Ensures recently
+    /// rendered HTML is available instantly on file switch, even after a cache purge.
+    private var cachedHTML: [URL: CachedHTML] = [:]
+    private var cachedHTMLAccessOrder: [URL] = []
+    private let cachedHTMLCacheLimit = 10
 
     init() {
         htmlCache.countLimit = 20
@@ -102,11 +119,16 @@ final class AppState {
         saveCurrentFileIfDirty()
         if let item = openFiles.first(where: { $0.id == id }) {
             cachedContentHash.removeValue(forKey: item.url)
+            fileContents.removeValue(forKey: item.url)
+            fileSavedHashes.removeValue(forKey: item.url)
+            cachedHTML.removeValue(forKey: item.url)
+            cachedHTMLAccessOrder.removeAll { $0 == item.url }
         }
         openFiles.removeAll { $0.id == id }
         if selectedFileID == id {
             clearSelection()
         }
+        WebViewCache.shared.remove(for: id)
     }
 
     // MARK: - Remove Folder
@@ -114,12 +136,20 @@ final class AppState {
     func removeFolder(id: UUID) {
         guard let idx = rootFolders.firstIndex(where: { $0.id == id }) else { return }
 
+        let folder = rootFolders[idx]
+
         if let selectedID = selectedFileID {
-            let folder = rootFolders[idx]
             let fileIDs = folder.allMarkdownFiles.map { $0.id }
             if fileIDs.contains(selectedID) {
                 clearSelection()
             }
+        }
+
+        for file in folder.allMarkdownFiles {
+            htmlCache.removeObject(forKey: file.url as NSURL)
+            cachedContentHash.removeValue(forKey: file.url)
+            cachedHTML.removeValue(forKey: file.url)
+            cachedHTMLAccessOrder.removeAll { $0 == file.url }
         }
 
         folderWatchers[id]?.stop()
@@ -130,30 +160,20 @@ final class AppState {
     // MARK: - Select File
 
     func selectFile(id: UUID) {
-        guard id != selectedFileID else { return }
-
+        // Don't guard against selectedFileID — the List(selection:) binding
+        // may already have set it before onChange fires. Always proceed
+        // to loadFileContent; it caches aggressively so re-selection is fast.
         saveCurrentFileIfDirty()
 
         let allItems = allAvailableFiles()
         guard let item = allItems.first(where: { $0.id == id }) else { return }
 
-        // Set file switching flag for instant response
-        isFileSwitching = true
-        loadFileContent(url: item.url, id: item.id, isSwitching: true)
-    }
-
-    // MARK: - Scroll position reset
-
-    /// Reset scroll position in both editor and preview to the top.
-    /// Call this when switching files to ensure a clean view.
-    func resetScrollPositions() {
-        // Editor scroll reset — access through PreviewWebView coordinator
-        // This is handled in ContentView by observing file changes
+        loadFileContent(url: item.url, id: item.id)
     }
 
     // MARK: - Shared file loading (cancellation-aware)
 
-    private func loadFileContent(url: URL, id: UUID, isSwitching: Bool = false) {
+    private func loadFileContent(url: URL, id: UUID) {
         // Cancel any in-flight work for the previous file
         pendingHTMLWork?.cancel()
         pendingHTMLWork = nil
@@ -167,34 +187,61 @@ final class AppState {
         selectedFileURL = url
         currentFileURL = url
 
-        // Try cache FIRST (synchronous — file is already known to exist and
-        // unchanged, so read is near-instant from the OS page cache).
+        // Try cache FIRST — in-memory content cache (zero disk IO) then HTML cache.
         let cacheKey = quickHashForCacheCheck(url: url)
-        if let cached = htmlCache.object(forKey: url as NSURL),
-           cachedContentHash[url] == cacheKey {
-            currentFileContent = FileService.readFileCached(at: url)
-            lastSavedContent = currentFileContent
-            isFileDirty = false
-            renderedHTML = cached.html
-            renderedBodyHTML = cached.bodyHTML
-            isLoadingFile = false
+        if let cachedContent = fileContents[url],
+           fileSavedHashes[url] == cacheKey {
+            // In-memory content cache hit — same content as on disk.
+            // Zero IO: content was kept from previous load or edit.
+            if let cached = htmlCache.object(forKey: url as NSURL),
+               cachedContentHash[url] == cacheKey {
+                // Full cache hit: content + HTML both cached
+                lastSavedContent = cachedContent
+                isFileDirty = false
+                isLoadingFile = false
+                currentFileContent = cachedContent
+                renderedHTML = cached.html
+                renderedBodyHTML = cached.bodyHTML
+                return
+            }
+            // Try secondary LRU cache (survives NSCache memory-pressure purges)
+            if let cached = cachedHTML[url],
+               cachedContentHash[url] == cacheKey {
+                lastSavedContent = cachedContent
+                isFileDirty = false
+                isLoadingFile = false
+                currentFileContent = cachedContent
+                renderedHTML = cached.html
+                renderedBodyHTML = cached.bodyHTML
+                return
+            }
+            // HTML cache miss — content ready, generate on background
+            startAsyncHTMLGeneration(content: cachedContent, url: url, token: token, cacheKey: cacheKey)
             return
         }
 
-        // Cache miss — read file on background, editor gets content first
+        // In-memory cache miss — read file on background, editor gets content first.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self, token == self.generation else { return }
 
             do {
                 let content = try FileService.readFile(at: url)
 
-                // Push content to editor immediately (don't wait for HTML)
+                // Always cache content — if the user switched away during the read,
+                // the cache ensures the next switch to this file is zero-IO.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.cacheFileContent(content, for: url, cacheKey: cacheKey)
+                }
+
+                guard token == self.generation else { return }
+
                 DispatchQueue.main.async { [weak self] in
                     guard let self, token == self.generation else { return }
-                    self.currentFileContent = content
                     self.lastSavedContent = content
                     self.isFileDirty = false
                     self.isLoadingFile = false
+                    self.currentFileContent = content
                 }
 
                 // Check cache again (may have been cached by another window since outer check)
@@ -207,19 +254,8 @@ final class AppState {
                     return
                 }
 
-                // Generate HTML on background — single parse pass returns both
-                // the body-only fragment (for incremental JS injection into the
-                // preview) and the full document (for initial loadHTMLString).
-                let (bodyHTML, fullHTML) = MarkdownParser.parseToHTML(content)
-
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, token == self.generation else { return }
-                    let cached = CachedHTML(html: fullHTML, bodyHTML: bodyHTML)
-                    self.htmlCache.setObject(cached, forKey: url as NSURL, cost: fullHTML.utf8.count)
-                    self.cachedContentHash[url] = cacheKey
-                    self.renderedHTML = fullHTML
-                    self.renderedBodyHTML = bodyHTML
-                }
+                // Generate HTML on background
+                self.generateAndCacheHTML(content: content, url: url, token: token, cacheKey: cacheKey)
             } catch {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, token == self.generation else { return }
@@ -235,11 +271,44 @@ final class AppState {
         }
     }
 
+    // MARK: - Shared HTML generation (called from both cache-hit and cache-miss paths)
+
+    /// Called when in-memory content cache hit but HTML cache miss.
+    /// Content is ready (no disk IO needed), just generate HTML on background.
+    private func startAsyncHTMLGeneration(content: String, url: URL, token: Int64, cacheKey: String) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self, token == self.generation else { return }
+            self.generateAndCacheHTML(content: content, url: url, token: token, cacheKey: cacheKey)
+        }
+    }
+
+    /// Generate HTML from markdown content, cache it, and update rendered properties.
+    private func generateAndCacheHTML(content: String, url: URL, token: Int64, cacheKey: String) {
+        let (bodyHTML, fullHTML) = MarkdownParser.parseToHTML(content)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, token == self.generation else { return }
+            let cached = CachedHTML(html: fullHTML, bodyHTML: bodyHTML)
+            self.htmlCache.setObject(cached, forKey: url as NSURL, cost: fullHTML.utf8.count)
+            self.cachedContentHash[url] = cacheKey
+            self.cacheRenderedHTML(cached, for: url)
+            self.renderedHTML = fullHTML
+            self.renderedBodyHTML = bodyHTML
+        }
+    }
+
     // MARK: - Content Updates (editing)
 
     func updateContent(_ newContent: String) {
-        currentFileContent = newContent
+        // currentFileContent is already set by the @Binding before onChange fires.
+        if let url = currentFileURL {
+            let cacheKey = quickHashForCacheCheck(url: url)
+            cacheFileContent(newContent, for: url, cacheKey: cacheKey)
+        }
         isFileDirty = newContent != lastSavedContent
+
+        // Programmatic changes (file switches) already have HTML from
+        // loadFileContent — skip duplicate generation and cache invalidation.
+        guard isFileDirty else { return }
 
         // Cancel any pending debounced HTML regeneration
         pendingHTMLWork?.cancel()
@@ -256,22 +325,13 @@ final class AppState {
 
     private func regenerateHTML() {
         let content = currentFileContent
-        let url = currentFileURL
+        guard let url = currentFileURL else { return }
         let token = generation  // capture current generation
+        let cacheKey = quickHashForCacheCheck(url: url)
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self, token == self.generation else { return }
-            let (bodyHTML, fullHTML) = MarkdownParser.parseToHTML(content)
-            DispatchQueue.main.async { [weak self] in
-                guard let self, token == self.generation else { return }
-                self.renderedHTML = fullHTML
-                self.renderedBodyHTML = bodyHTML
-                // Invalidate cache for this URL since content changed
-                if let url {
-                    self.cachedContentHash.removeValue(forKey: url)
-                    self.htmlCache.removeObject(forKey: url as NSURL)
-                }
-            }
+            self.generateAndCacheHTML(content: content, url: url, token: token, cacheKey: cacheKey)
         }
     }
 
@@ -283,6 +343,8 @@ final class AppState {
             try FileService.writeFile(currentFileContent, to: url)
             lastSavedContent = currentFileContent
             isFileDirty = false
+            // Update saved hash so in-memory cache stays valid
+            fileSavedHashes[url] = quickHashForCacheCheck(url: url)
         } catch {
             let alert = NSAlert()
             alert.messageText = "Cannot Save File"
@@ -331,6 +393,41 @@ final class AppState {
         return "\(size):\(Int(modDate.timeIntervalSince1970))"
     }
 
+    /// Stores file content in the in-memory cache and enforces LRU eviction
+    /// so the dictionary doesn't grow unboundedly as files are opened over time.
+    private func cacheFileContent(_ content: String, for url: URL, cacheKey: String) {
+        fileContents[url] = content
+        fileSavedHashes[url] = cacheKey
+        if let idx = fileContentAccessOrder.firstIndex(of: url) {
+            fileContentAccessOrder.remove(at: idx)
+        }
+        fileContentAccessOrder.append(url)
+        if fileContents.count > fileContentCacheLimit,
+           let evicted = fileContentAccessOrder.first {
+            fileContentAccessOrder.removeFirst()
+            fileContents.removeValue(forKey: evicted)
+            fileSavedHashes.removeValue(forKey: evicted)
+            cachedContentHash.removeValue(forKey: evicted)
+            htmlCache.removeObject(forKey: evicted as NSURL)
+            cachedHTML.removeValue(forKey: evicted)
+            cachedHTMLAccessOrder.removeAll { $0 == evicted }
+        }
+    }
+
+    /// Stores rendered HTML in the secondary LRU cache (survives NSCache purges).
+    private func cacheRenderedHTML(_ cached: CachedHTML, for url: URL) {
+        cachedHTML[url] = cached
+        if let idx = cachedHTMLAccessOrder.firstIndex(of: url) {
+            cachedHTMLAccessOrder.remove(at: idx)
+        }
+        cachedHTMLAccessOrder.append(url)
+        if cachedHTML.count > cachedHTMLCacheLimit,
+           let evicted = cachedHTMLAccessOrder.first {
+            cachedHTMLAccessOrder.removeFirst()
+            cachedHTML.removeValue(forKey: evicted)
+        }
+    }
+
     // MARK: - File System Changes
 
     private func handleFileSystemChanges(rootFolderID: UUID, urls: [URL]) {
@@ -369,6 +466,12 @@ final class AppState {
         removeFileRecursively(from: &rootFolders[idx], url: url)
         htmlCache.removeObject(forKey: url as NSURL)
         cachedContentHash.removeValue(forKey: url)
+        fileContents.removeValue(forKey: url)
+        fileSavedHashes.removeValue(forKey: url)
+        fileContentAccessOrder.removeAll { $0 == url }
+        cachedHTML.removeValue(forKey: url)
+        cachedHTMLAccessOrder.removeAll { $0 == url }
+        WebViewCache.shared.removeWebView(for: url)
     }
 
     private func removeFileRecursively(from item: inout FileTreeItem, url: URL) {
@@ -412,6 +515,8 @@ final class AppState {
             cachedContentHash.removeValue(forKey: url)
             do {
                 let content = try FileService.readFile(at: url)
+                let cacheKey = quickHashForCacheCheck(url: url)
+                cacheFileContent(content, for: url, cacheKey: cacheKey)
                 currentFileContent = content
                 lastSavedContent = content
                 isFileDirty = false
