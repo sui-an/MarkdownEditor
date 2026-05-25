@@ -78,7 +78,9 @@ struct MarkdownTextView: NSViewRepresentable {
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
-        scrollView.drawsBackground = false
+        let bg = NSColor.controlBackgroundColor.withAlphaComponent(1.0)
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = bg
         scrollView.verticalScrollElasticity = .none
         scrollView.horizontalScrollElasticity = .none
 
@@ -103,7 +105,7 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.isRichText = true
         textView.usesFontPanel = false
         textView.textColor = NSColor.textColor
-        textView.backgroundColor = NSColor.controlBackgroundColor
+        textView.backgroundColor = bg
         textView.isEditable = true
         textView.isSelectable = true
         textView.enabledTextCheckingTypes = 0
