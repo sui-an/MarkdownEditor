@@ -190,16 +190,13 @@ final class WebViewCache {
 // MARK: - PreviewWebView
 
 struct PreviewWebView: NSViewRepresentable {
-    /// Full HTML document (template + body) — used for first load.
     let html: String
-    /// Body-only HTML fragment — used for incremental DOM updates via JS.
     let bodyHTML: String
     let hasFile: Bool
-    /// The file's parent directory — WKWebView baseURL for resolving relative resources.
     let baseURL: URL?
-    /// The actual file URL — used as cache key for per-document WebView lookup.
     let fileURL: URL?
     let fileID: UUID?
+    var viewRefs: ViewRefs?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -221,9 +218,8 @@ struct PreviewWebView: NSViewRepresentable {
         let (webView, state) = WebViewCache.shared.webView(for: fileID, url: fileURL)
 
         if context.coordinator.currentWebView !== webView {
-            // Add new WebView FIRST, then remove old ones — avoids a blank
-            // container flash while the old subview is missing.
             context.coordinator.currentWebView = webView
+            viewRefs?.webView = webView
 
             state.configureScrollView(webView)
             webView.translatesAutoresizingMaskIntoConstraints = false

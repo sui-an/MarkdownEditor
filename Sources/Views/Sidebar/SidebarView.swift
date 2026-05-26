@@ -5,9 +5,9 @@ struct SidebarView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        List(selection: Bindable(appState).selectedFileID) {
-            // Action buttons — like Notes compose button
-            Section {
+        VStack(spacing: 0) {
+            // Action buttons: Open File | Open Folder (vertical)
+            VStack(spacing: 2) {
                 SidebarActionButton(
                     icon: "doc.badge.plus",
                     label: "Open File",
@@ -19,50 +19,58 @@ struct SidebarView: View {
                     action: openFolderDialog
                 )
             }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
 
-            // Opened individual files
-            if !appState.openFiles.isEmpty {
-                Section("Opened Files") {
-                    ForEach(appState.openFiles) { item in
-                        FileRowView(
-                            item: item,
-                            isSelected: appState.selectedFileID == item.id
+            Divider()
+
+            List(selection: Bindable(appState).selectedFileID) {
+
+                // Opened individual files
+                if !appState.openFiles.isEmpty {
+                    Section("Opened Files") {
+                        ForEach(appState.openFiles) { item in
+                            FileRowView(
+                                item: item,
+                                isSelected: appState.selectedFileID == item.id
+                            )
+                            .contextMenu {
+                                Button("Close") {
+                                    appState.closeFile(id: item.id)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Folders
+                ForEach(appState.rootFolders) { folder in
+                    Section {
+                        FolderHeaderView(
+                            folder: folder,
+                            onRemove: { appState.removeFolder(id: folder.id) }
                         )
+                    } header: {
+                        EmptyView()
+                    }
+
+                    ForEach(folder.allMarkdownFiles) { file in
+                        FileRowView(
+                            item: file,
+                            isSelected: appState.selectedFileID == file.id
+                        )
+                        .padding(.leading, 4)
                         .contextMenu {
-                            Button("Close") {
-                                appState.closeFile(id: item.id)
+                            Button("Reveal in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([file.url])
                             }
                         }
                     }
                 }
             }
-
-            // Folders
-            ForEach(appState.rootFolders) { folder in
-                Section {
-                    FolderHeaderView(
-                        folder: folder,
-                        onRemove: { appState.removeFolder(id: folder.id) }
-                    )
-                } header: {
-                    EmptyView()
-                }
-
-                ForEach(folder.allMarkdownFiles) { file in
-                    FileRowView(
-                        item: file,
-                        isSelected: appState.selectedFileID == file.id
-                    )
-                    .padding(.leading, 4)
-                    .contextMenu {
-                        Button("Reveal in Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([file.url])
-                        }
-                    }
-                }
-            }
+            .listStyle(.sidebar)
         }
-        .listStyle(.sidebar)
         .frame(minWidth: 180)
         .onChange(of: appState.selectedFileID) { _, newValue in
             guard let id = newValue else { return }

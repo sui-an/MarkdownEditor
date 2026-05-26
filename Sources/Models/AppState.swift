@@ -29,6 +29,9 @@ final class AppState {
     var renderedBodyHTML: String = ""
     var isFileDirty: Bool = false
     var isLoadingFile: Bool = false
+    var searchState: SearchState
+    var outlineHeadings: [HeadingItem] = []
+    var isOutlineVisible = false
 
     private var folderWatchers: [UUID: FolderWatcher] = [:]
     private var selectedFileURL: URL?
@@ -59,6 +62,9 @@ final class AppState {
     /// Active HTML-generation work item. Cancelled on file switch to avoid wasted work.
     private var pendingHTMLWork: DispatchWorkItem?
 
+    /// Active outline-parsing work item. Cancelled on new keystroke.
+    private var pendingOutlineWork: DispatchWorkItem?
+
     /// Content hash of the last cached version for a given URL. Avoids re-parsing
     /// when content hasn't actually changed (e.g. switching tabs).
     private var cachedContentHash: [URL: String] = [:]
@@ -73,6 +79,44 @@ final class AppState {
     init() {
         htmlCache.countLimit = 20
         htmlCache.totalCostLimit = 30 * 1024 * 1024  // 30 MB
+        // Initialize with empty closure first — @Observable macro requires
+        // all stored properties to be initialized before accessing self.
+        searchState = SearchState { "" }
+        searchState.setContent { [weak self] in self?.currentFileContent ?? "" }
+    }
+
+    // MARK: - New Note
+
+    func createNewNote() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText, .text]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "Untitled.md"
+        panel.title = "New Note"
+        panel.message = "Choose where to save the new markdown file"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard url.pathExtension.lowercased() == "md" else {
+            let alert = NSAlert()
+            alert.messageText = "Invalid Extension"
+            alert.informativeText = "Please use a .md file extension"
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
+
+        // Create file with empty content
+        let template = ""
+        do {
+            try FileService.writeFile(template, to: url)
+            openFile(url: url)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Cannot Create Note"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
     }
 
     // MARK: - Open File
@@ -177,6 +221,8 @@ final class AppState {
         // Cancel any in-flight work for the previous file
         pendingHTMLWork?.cancel()
         pendingHTMLWork = nil
+        pendingOutlineWork?.cancel()
+        pendingOutlineWork = nil
 
         // Advance generation so stale async blocks discard results
         let token = OSAtomicIncrement64(&generation)
@@ -186,6 +232,9 @@ final class AppState {
         selectedFileID = id
         selectedFileURL = url
         currentFileURL = url
+
+        // Persist last opened document for session restore
+        SessionRestoreService.saveLastOpened(url)
 
         // Try cache FIRST — in-memory content cache (zero disk IO) then HTML cache.
         let cacheKey = quickHashForCacheCheck(url: url)
@@ -306,6 +355,9 @@ final class AppState {
         }
         isFileDirty = newContent != lastSavedContent
 
+        // Always refresh outline — even on file load (isFileDirty = false)
+        refreshOutline(newContent)
+
         // Programmatic changes (file switches) already have HTML from
         // loadFileContent — skip duplicate generation and cache invalidation.
         guard isFileDirty else { return }
@@ -333,6 +385,20 @@ final class AppState {
             guard let self, token == self.generation else { return }
             self.generateAndCacheHTML(content: content, url: url, token: token, cacheKey: cacheKey)
         }
+    }
+
+    // MARK: - Outline
+
+    private func refreshOutline(_ content: String) {
+        pendingOutlineWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            let headings = HeadingParser.parse(content)
+            DispatchQueue.main.async {
+                self?.outlineHeadings = headings
+            }
+        }
+        pendingOutlineWork = work
+        DispatchQueue.global(qos: .utility).async(execute: work)
     }
 
     // MARK: - Save
@@ -521,7 +587,9 @@ final class AppState {
                 lastSavedContent = content
                 isFileDirty = false
                 regenerateHTML()
-            } catch {}
+            } catch {
+            print("Failed to reload externally-changed file: \(error)")
+        }
         }
     }
 }

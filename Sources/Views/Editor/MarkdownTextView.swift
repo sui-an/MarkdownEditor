@@ -14,6 +14,19 @@ final class ImageDropTextView: NSTextView {
     var onImageDrop: ((URL) -> Void)?
     var onImagePaste: ((NSImage) -> Void)?
 
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty else { return }
+        let placeholder = "请开始你的创作之旅吧～ ^.^"
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor.placeholderTextColor,
+            .font: NSFont.systemFont(ofSize: 13)
+        ]
+        let inset = textContainerInset
+        let point = NSPoint(x: inset.width + 4, y: inset.height)
+        (placeholder as NSString).draw(at: point, withAttributes: attrs)
+    }
+
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let pasteboard = sender.draggingPasteboard
 
@@ -62,18 +75,111 @@ final class ImageDropTextView: NSTextView {
     }
 }
 
+// MARK: - Scroll View that preserves horizontal scroll position across collapse/expand
+
+final class EditorScrollView: NSScrollView {
+    /// Last non-zero horizontal offset, updated on every user scroll.
+    private var lastNonZeroHorizontalOffset: CGFloat = 0
+    /// Offset to re-apply if the text system resets it after deferred layout.
+    private var pendingRestoreOffset: CGFloat = 0
+
+    func clearPendingRestoreOffset() {
+        pendingRestoreOffset = 0
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(boundsDidChange),
+            name: NSView.boundsDidChangeNotification,
+            object: contentView
+        )
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(boundsDidChange),
+            name: NSView.boundsDidChangeNotification,
+            object: contentView
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSView.boundsDidChangeNotification,
+            object: contentView
+        )
+    }
+
+    @objc private func boundsDidChange(_ notification: Notification) {
+        let x = contentView.bounds.origin.x
+        if x > 0 {
+            lastNonZeroHorizontalOffset = x
+            pendingRestoreOffset = 0
+        } else if pendingRestoreOffset > 0 {
+            var bounds = contentView.bounds
+            bounds.origin.x = pendingRestoreOffset
+            contentView.bounds = bounds
+        }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let oldWidth = frame.width
+
+        // When collapsing to near-zero width, detach width tracking so the text
+        // container keeps its previous width — text never reflows to 0, which
+        // prevents NSTextView from resetting the horizontal scroll position.
+        if newSize.width < 200, oldWidth >= 200 {
+            if let textView = documentView as? NSTextView, let container = textView.textContainer {
+                container.widthTracksTextView = false
+                container.containerSize.width = oldWidth
+            }
+        }
+
+        let savedOffset = lastNonZeroHorizontalOffset
+        super.setFrameSize(newSize)
+
+        if oldWidth < 200, newSize.width >= 200 {
+            // Re-attach width tracking. The container already has the correct
+            // width from the collapse step and matches the new frame, so no
+            // re-layout happens and the scroll position is preserved.
+            if let textView = documentView as? NSTextView, let container = textView.textContainer {
+                container.widthTracksTextView = true
+            }
+            // Safety net: if the text system re-layout still reset the offset,
+            // re-apply it. The boundsDidChange handler will catch any further
+            // resets via pendingRestoreOffset.
+            if savedOffset > 0 {
+                if contentView.bounds.origin.x == 0 {
+                    var bounds = contentView.bounds
+                    bounds.origin.x = savedOffset
+                    contentView.bounds = bounds
+                }
+                pendingRestoreOffset = savedOffset
+            }
+        }
+    }
+}
+
 // MARK: - NSViewRepresentable
 
 struct MarkdownTextView: NSViewRepresentable {
     @Binding var text: String
     var currentFileURL: URL?
+    var viewRefs: ViewRefs?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = EditorScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
@@ -101,6 +207,7 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = true
         textView.autoresizingMask = [.width, .height]
+        viewRefs?.textView = textView
         textView.allowsUndo = true
         textView.isRichText = true
         textView.usesFontPanel = false
@@ -163,9 +270,10 @@ struct MarkdownTextView: NSViewRepresentable {
         // Text inset — horizontal padding + top spacing
         textView.textContainerInset = NSSize(width: 8, height: 12)
 
-        // Disable automatic content insets so text exits cleanly at top
+        // Disable automatic content insets so text exits cleanly at top,
+        // but manually account for the ruler width in left inset.
         scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: ruler.ruleThickness, bottom: 0, right: 0)
 
         return scrollView
     }
@@ -196,6 +304,25 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
         context.coordinator.suppressTextDidChange = false
         context.coordinator.scheduleImageProcessing()
+        // Focus cursor when opening a new empty note
+        if text.isEmpty {
+            textView.window?.makeFirstResponder(textView)
+        }
+        // Scroll to top-left when switching to a different document.
+        // scrollRangeToVisible forces the layout manager to lay out the
+        // first character so the content size is correct. A deferred
+        // explicit scroll to (0,0) resets the horizontal position too,
+        // since scrollRangeToVisible only guarantees vertical visibility.
+        if context.coordinator.lastFileURL != currentFileURL, !text.isEmpty {
+            if let editorScroll = scrollView as? EditorScrollView {
+                editorScroll.clearPendingRestoreOffset()
+            }
+            textView.scrollRangeToVisible(NSRange(location: 0, length: 1))
+            DispatchQueue.main.async { [scrollView] in
+                scrollView.contentView.scroll(to: .zero)
+            }
+        }
+        context.coordinator.lastFileURL = currentFileURL
     }
 
     // MARK: - Coordinator
@@ -206,6 +333,8 @@ struct MarkdownTextView: NSViewRepresentable {
         var suppressTextDidChange = false
         var scrollObserver: Any?
         var textChangeObserver: Any?
+        /// Tracks the last opened file URL so we can detect document switches.
+        var lastFileURL: URL?
         /// Cache of decoded NSImages keyed by URL string. Avoids re-decoding
         /// base64 images on every processInlineImages call (the biggest bottleneck
         /// for files with embedded base64 images).
@@ -375,9 +504,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 }
             }
 
-            DispatchQueue.main.async {
-                self.suppressTextDidChange = false
-            }
+            self.suppressTextDidChange = false
         }
 
         // MARK: - Image Loading

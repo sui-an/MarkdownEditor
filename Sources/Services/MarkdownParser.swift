@@ -72,7 +72,7 @@ enum MarkdownParser {
         // Pre-process base64 data URIs before cmark-gfm (avoids 4096-byte URL limit)
         let preprocessed = preprocessBase64Images(mermaidResult.text)
         let bodyHTML = renderBody(preprocessed)
-        let finalBody = reinsertMermaidBlocks(bodyHTML, mermaidResult)
+        let finalBody = injectHeadingIDs(reinsertMermaidBlocks(bodyHTML, mermaidResult))
 
         let css = Self.previewCSS
         let mermaidScript = mermaidResult.blocks.isEmpty ? "" : mermaidHTML()
@@ -98,7 +98,7 @@ enum MarkdownParser {
         // Pre-process base64 data URIs before cmark-gfm (avoids 4096-byte URL limit)
         let preprocessed = preprocessBase64Images(mermaidResult.text)
         let bodyHTML = renderBody(preprocessed)
-        return reinsertMermaidBlocks(bodyHTML, mermaidResult)
+        return injectHeadingIDs(reinsertMermaidBlocks(bodyHTML, mermaidResult))
     }
 
     // MARK: - cmark-gfm rendering (with regex fallback)
@@ -188,6 +188,42 @@ enum MarkdownParser {
             out = out.replacingOccurrences(of: "%%MERMAID_\(i)%%", with: div)
         }
         return out
+    }
+
+    /// Inject id="heading-{slug}" into <h1>-<h6> tags for outline scroll sync.
+    private static func injectHeadingIDs(_ html: String) -> String {
+        let nsHTML = html as NSString
+        guard let regex = try? NSRegularExpression(
+            pattern: #"<h([1-6])([^>]*)>(.*?)</h\1>"#,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else { return html }
+
+        var result = ""
+        var lastEnd = 0
+        for match in regex.matches(in: html, range: NSRange(location: 0, length: nsHTML.length)) {
+            let full = match.range(at: 0)
+            let levelRange = match.range(at: 1)
+            let attrsRange = match.range(at: 2)
+            let contentRange = match.range(at: 3)
+
+            result += nsHTML.substring(with: NSRange(location: lastEnd, length: full.location - lastEnd))
+
+            let level = nsHTML.substring(with: levelRange)
+            let existingAttrs = nsHTML.substring(with: attrsRange)
+            let content = nsHTML.substring(with: contentRange)
+
+            // Strip any inline HTML tags from content for clean slug
+            let plainText = content.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            let slug = HeadingParser.slugify(plainText)
+            let idAttr = " id=\"heading-\(slug)\""
+
+            result += "<h\(level)\(existingAttrs)\(idAttr)>\(content)</h\(level)>"
+            lastEnd = full.location + full.length
+        }
+        if lastEnd < nsHTML.length {
+            result += nsHTML.substring(with: NSRange(location: lastEnd, length: nsHTML.length - lastEnd))
+        }
+        return result
     }
 
     /// Returns the shell of the preview HTML template — everything except

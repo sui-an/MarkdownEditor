@@ -53,27 +53,30 @@ final class MarkdownTextStorage: NSTextStorage {
     }
 
     @objc private func applyHighlighting(_ range: NSRange) {
+        let length = backingStore.length
+        guard length > 0, range.location < length else { return }
+        let safeRange = NSRange(location: range.location, length: min(range.length, length - range.location))
+        guard safeRange.length > 0 else { return }
+
         // Reset foreground to dynamic NSColor.textColor which adapts to
         // light/dark mode automatically. Only .foregroundColor is touched —
         // .font is never set globally, preserving CJK font cascading.
         // Only reset the highlighted range, not the entire document.
-        backingStore.addAttribute(.foregroundColor, value: NSColor.textColor, range: range)
+        backingStore.addAttribute(.foregroundColor, value: NSColor.textColor, range: safeRange)
 
         let text = backingStore.string as NSString
-        let length = text.length
+        let textLength = text.length
 
-        guard length < 200_000 else { return }
+        guard textLength < 200_000 else { return }
 
         // Only run regex on the limited range, not the entire document
-        highlightHeaders(in: text, length: length, range: range)
-        highlightBlockquotes(in: text, length: length, range: range)
-        highlightCodeBlocks(in: text, length: length, range: range)
-        highlightInlinePatterns(in: text, length: length, range: range)
+        highlightHeaders(in: text, length: textLength, range: safeRange)
+        highlightBlockquotes(in: text, length: textLength, range: safeRange)
+        highlightCodeBlocks(in: text, length: textLength, range: safeRange)
+        highlightInlinePatterns(in: text, length: textLength, range: safeRange)
 
-        // Only invalidateLayout for the limited range, not the entire document
-        let fullRange = NSRange(location: 0, length: backingStore.length)
         for layoutManager in layoutManagers {
-            layoutManager.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
+            layoutManager.invalidateLayout(forCharacterRange: safeRange, actualCharacterRange: nil)
         }
     }
 
