@@ -58,11 +58,34 @@ struct ContentView: View {
             .environment(appState)
             .focusedSceneValue(\.currentAppState, appState)
             .onAppear {
+                // Check for a file dropped on Dock during cold launch
+                if let appDelegate = NSApplication.shared.delegate as? AppDelegate,
+                   let url = appDelegate.consumePendingFileURL() {
+                    appState.openFile(url: url)
+                }
+                // Session restore — only on first appear, skip if Dock drop handled above
                 guard !didRestore else { return }
                 didRestore = true
                 if let url = SessionRestoreService.restoreLastOpened() {
                     appState.openFile(url: url)
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openFileURL)) { notification in
+                if let url = notification.object as? URL {
+                    appState.openFile(url: url)
+                }
+            }
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                for provider in providers {
+                    _ = provider.loadObject(ofClass: NSURL.self) { item, _ in
+                        if let nsurl = item as? NSURL {
+                            DispatchQueue.main.async {
+                                self.appState.openFile(url: nsurl as URL)
+                            }
+                        }
+                    }
+                }
+                return true
             }
             .onDisappear {
                 appState.cleanup()
