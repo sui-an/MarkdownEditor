@@ -7,6 +7,33 @@ final class MarkdownTextStorage: NSTextStorage {
     /// cascading regex highlighting on every NSTextStorage mutation.
     var suppressHighlighting = false
 
+    // MARK: - Pre-compiled regex (compiled once, reused on every keystroke)
+
+    private static let headerRegex = try! NSRegularExpression(
+        pattern: #"^(#{1,6})(?=\s)"#, options: .anchorsMatchLines
+    )
+    private static let blockquoteRegex = try! NSRegularExpression(
+        pattern: #"^>\s.*$"#, options: .anchorsMatchLines
+    )
+    private static let codeBlockRegex = try! NSRegularExpression(
+        pattern: #"```[\s\S]*?```"#, options: []
+    )
+    private static let boldRegex = try! NSRegularExpression(
+        pattern: #"\*\*(.+?)\*\*"#, options: []
+    )
+    private static let italicRegex = try! NSRegularExpression(
+        pattern: #"(\*|_)(.+?)\1"#, options: []
+    )
+    private static let linkRegex = try! NSRegularExpression(
+        pattern: #"\[(.+?)\]\((.+?)\)"#, options: []
+    )
+    private static let imageRegex = try! NSRegularExpression(
+        pattern: #"!\[(.+?)\]\((.+?)\)"#, options: []
+    )
+    private static let strikeRegex = try! NSRegularExpression(
+        pattern: #"~~(.+?)~~"#, options: []
+    )
+
     override var string: String {
         backingStore.string
     }
@@ -96,13 +123,8 @@ final class MarkdownTextStorage: NSTextStorage {
     // MARK: - Headers
 
     private func highlightHeaders(in text: NSString, length: Int, range: NSRange? = nil) {
-        // Only color the # prefix — leave the heading text (which may contain
-        // CJK/Unicode) with its default NSTextView attributes intact.
-        let pattern = #"^(#{1,6})(?=\s)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .anchorsMatchLines) else { return }
-
         let searchRange = range ?? NSRange(location: 0, length: length)
-        for match in regex.matches(in: text as String, range: searchRange) {
+        for match in Self.headerRegex.matches(in: text as String, range: searchRange) {
             backingStore.addAttribute(.foregroundColor, value: HighlightColors.header, range: match.range)
         }
     }
@@ -110,10 +132,8 @@ final class MarkdownTextStorage: NSTextStorage {
     // MARK: - Blockquotes
 
     private func highlightBlockquotes(in text: NSString, length: Int, range: NSRange? = nil) {
-        let pattern = #"^>\s.*$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .anchorsMatchLines) else { return }
         let searchRange = range ?? NSRange(location: 0, length: length)
-        for match in regex.matches(in: text as String, range: searchRange) {
+        for match in Self.blockquoteRegex.matches(in: text as String, range: searchRange) {
             backingStore.addAttribute(.foregroundColor, value: HighlightColors.quote, range: match.range)
         }
     }
@@ -121,10 +141,8 @@ final class MarkdownTextStorage: NSTextStorage {
     // MARK: - Code Blocks
 
     private func highlightCodeBlocks(in text: NSString, length: Int, range: NSRange? = nil) {
-        let pattern = #"```[\s\S]*?```"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
         let searchRange = range ?? NSRange(location: 0, length: length)
-        for match in regex.matches(in: text as String, range: searchRange) {
+        for match in Self.codeBlockRegex.matches(in: text as String, range: searchRange) {
             backingStore.addAttribute(.foregroundColor, value: HighlightColors.code, range: match.range)
         }
     }
@@ -134,58 +152,29 @@ final class MarkdownTextStorage: NSTextStorage {
     private func highlightInlinePatterns(in text: NSString, length: Int, range: NSRange? = nil) {
         let searchRange = range ?? NSRange(location: 0, length: length)
 
-        // Bold: **text** or __text__
-        let boldPattern = #"\*\*(.+?)\*\*"#
-        if let boldRegex = try? NSRegularExpression(pattern: boldPattern, options: []) {
-            let boldMatches = boldRegex.matches(in: text as String, range: searchRange)
-            for match in boldMatches {
-                if match.range(at: 1).location != NSNotFound {
-                    backingStore.addAttribute(.foregroundColor, value: HighlightColors.bold, range: match.range(at: 1))
-                }
+        for match in Self.boldRegex.matches(in: text as String, range: searchRange) {
+            if match.range(at: 1).location != NSNotFound {
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.bold, range: match.range(at: 1))
             }
         }
-
-        // Italic: *text* or _text_
-        let italicPattern = #"(\*|_)(.+?)\1"#
-        if let italicRegex = try? NSRegularExpression(pattern: italicPattern, options: []) {
-            let italicMatches = italicRegex.matches(in: text as String, range: searchRange)
-            for match in italicMatches {
-                if match.range(at: 2).location != NSNotFound {
-                    backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic, range: match.range(at: 2))
-                }
+        for match in Self.italicRegex.matches(in: text as String, range: searchRange) {
+            if match.range(at: 2).location != NSNotFound {
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic, range: match.range(at: 2))
             }
         }
-
-        // Links: [text](url)
-        let linkPattern = #"\[(.+?)\]\((.+?)\)"#
-        if let linkRegex = try? NSRegularExpression(pattern: linkPattern, options: []) {
-            let linkMatches = linkRegex.matches(in: text as String, range: searchRange)
-            for match in linkMatches {
-                if match.range(at: 1).location != NSNotFound {
-                    backingStore.addAttribute(.foregroundColor, value: HighlightColors.link, range: match.range(at: 1))
-                }
+        for match in Self.linkRegex.matches(in: text as String, range: searchRange) {
+            if match.range(at: 1).location != NSNotFound {
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.link, range: match.range(at: 1))
             }
         }
-
-        // Images: ![alt](url)
-        let imagePattern = #"!\[(.+?)\]\((.+?)\)"#
-        if let imageRegex = try? NSRegularExpression(pattern: imagePattern, options: []) {
-            let imageMatches = imageRegex.matches(in: text as String, range: searchRange)
-            for match in imageMatches {
-                if match.range(at: 1).location != NSNotFound {
-                    backingStore.addAttribute(.foregroundColor, value: HighlightColors.image, range: match.range(at: 1))
-                }
+        for match in Self.imageRegex.matches(in: text as String, range: searchRange) {
+            if match.range(at: 1).location != NSNotFound {
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.image, range: match.range(at: 1))
             }
         }
-
-        // Strikethrough: ~~text~~
-        let strikePattern = #"~~(.+?)~~"#
-        if let strikeRegex = try? NSRegularExpression(pattern: strikePattern, options: []) {
-            let strikeMatches = strikeRegex.matches(in: text as String, range: searchRange)
-            for match in strikeMatches {
-                if match.range(at: 1).location != NSNotFound {
-                    backingStore.addAttribute(.foregroundColor, value: HighlightColors.strike, range: match.range(at: 1))
-                }
+        for match in Self.strikeRegex.matches(in: text as String, range: searchRange) {
+            if match.range(at: 1).location != NSNotFound {
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.strike, range: match.range(at: 1))
             }
         }
     }
