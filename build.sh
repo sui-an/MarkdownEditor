@@ -81,9 +81,16 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<- PLIST
 			<string>Editor</string>
 			<key>LSHandlerRank</key>
 			<string>Default</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>md</string>
+				<string>markdown</string>
+				<string>mkd</string>
+			</array>
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>net.daringfireball.markdown</string>
+				<string>public.plain-text</string>
 			</array>
 		</dict>
 	</array>
