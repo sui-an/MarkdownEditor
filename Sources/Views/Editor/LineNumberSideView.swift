@@ -1,6 +1,8 @@
 import AppKit
 
-final class LineNumberRulerView: NSRulerView {
+/// Standalone view that draws line numbers beside a text view.
+/// Replaces LineNumberRulerView to avoid NSScrollView ruler timing issues.
+final class LineNumberSideView: NSView {
     weak var textView: NSTextView?
 
     private let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
@@ -8,16 +10,16 @@ final class LineNumberRulerView: NSRulerView {
 
     init(textView: NSTextView) {
         self.textView = textView
-        super.init(scrollView: textView.enclosingScrollView!, orientation: .verticalRuler)
-        self.clientView = textView
-        self.ruleThickness = 30
+        super.init(frame: .zero)
     }
 
-    required init(coder: NSCoder) {
+    required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func drawHashMarksAndLabels(in rect: NSRect) {
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
         guard let textView = textView,
               let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer else { return }
@@ -27,34 +29,34 @@ final class LineNumberRulerView: NSRulerView {
         let textLength = textContent.length
         guard textLength > 0 else { return }
 
-        // Use the bounding rect to find glyphs near the visible area without
-        // forcing layout of the entire document.  With
-        // allowsNonContiguousLayout = true, only visible glyphs are laid out,
-        // so this is O(1) for the glyph lookup and O(visible_lines) for drawing.
-        let visibleGlyphRange = layoutManager.glyphRange(forBoundingRectWithoutAdditionalLayout: visibleRect, in: textContainer)
+        let visibleGlyphRange = layoutManager.glyphRange(
+            forBoundingRectWithoutAdditionalLayout: visibleRect,
+            in: textContainer
+        )
         guard visibleGlyphRange.length > 0 else { return }
 
-        // Extend slightly above/below so partially-visible lines are drawn too.
         let extendedRect = NSRect(
             x: visibleRect.minX,
             y: max(0, visibleRect.minY - 100),
             width: visibleRect.width,
             height: visibleRect.height + 200
         )
-        let extGlyphRange = layoutManager.glyphRange(forBoundingRectWithoutAdditionalLayout: extendedRect, in: textContainer)
+        let extGlyphRange = layoutManager.glyphRange(
+            forBoundingRectWithoutAdditionalLayout: extendedRect,
+            in: textContainer
+        )
         guard extGlyphRange.length > 0 else { return }
 
-        // Convert to a character range we can walk line-by-line.
-        let charRange = layoutManager.characterRange(forGlyphRange: extGlyphRange, actualGlyphRange: nil)
+        let charRange = layoutManager.characterRange(
+            forGlyphRange: extGlyphRange,
+            actualGlyphRange: nil
+        )
         guard charRange.location != NSNotFound, charRange.location < textLength else { return }
 
-        // Fast-scan through characters before the visible area counting newlines.
-        // This is O(prefix_chars) but avoids O(prefix_lines) calls to
-        // boundingRect which was the cause of the performance cliff.
         var lineNumber = 1
         let scanEnd = min(charRange.location, textLength)
         for i in 0..<scanEnd {
-            if textContent.character(at: i) == 0x0A { // '\n'
+            if textContent.character(at: i) == 0x0A {
                 lineNumber += 1
             }
         }
@@ -69,24 +71,29 @@ final class LineNumberRulerView: NSRulerView {
             .paragraphStyle: paraStyle
         ]
 
-        var lineIndex = lineNumber
+        let viewWidth = bounds.width
         var charIndex = charRange.location
+        var lineIndex = lineNumber
 
         while charIndex < textLength {
             let lineRange = textContent.lineRange(for: NSRange(location: charIndex, length: 0))
-            let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: lineRange,
+                actualCharacterRange: nil
+            )
             let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
 
-            // Stop once we're past the visible area
-            if glyphRect.minY > visibleRect.maxY {
-                break
-            }
+            if glyphRect.minY > visibleRect.maxY { break }
 
             if glyphRect.maxY >= visibleRect.minY && glyphRect.minY <= visibleRect.maxY {
                 let lineStr = "\(lineIndex)"
-                // Convert from document Y to ruler-visible Y
-                let y = glyphRect.minY - visibleRect.minY + (glyphRect.height - font.pointSize) / 2
-                let labelRect = NSRect(x: 0, y: y, width: ruleThickness - 4, height: font.pointSize)
+                let localY = glyphRect.minY - visibleRect.minY
+                    + (glyphRect.height - font.pointSize) / 2
+                let labelRect = NSRect(
+                    x: 0, y: localY,
+                    width: viewWidth - 4,
+                    height: font.pointSize
+                )
                 lineStr.draw(in: labelRect, withAttributes: attrs)
             }
 

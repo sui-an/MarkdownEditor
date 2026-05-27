@@ -26,9 +26,9 @@ struct ContentView: View {
     @State private var didRestore = false
     @State private var savedSidebarVis = 0
     @AppStorage("previewOnly") private var previewOnly = false
+    @AppStorage("previewContentWide") private var previewContentWide = false
     @State private var outlinePanel: OutlinePanelWindow?
     @State private var searchPanel: SearchPanelWindow?
-    @State private var isTogglingOutline = false
 
     /// Stored in UserDefaults so sidebar visibility survives app restarts.
     @AppStorage("sidebarVis") private var sidebarVis = 0
@@ -64,6 +64,9 @@ struct ContentView: View {
                     appState.openFile(url: url)
                 }
             }
+            .onDisappear {
+                appState.cleanup()
+            }
             .onChange(of: appState.outlineHeadings) { _, headings in
                 outlinePanel?.updateHeadings(headings)
             }
@@ -77,7 +80,20 @@ struct ContentView: View {
                     .help("New Note (⌘N)")
                 }
 
-                ToolbarItem(id: "outlineToggle", placement: .secondaryAction) {
+                if previewOnly {
+                    ToolbarItem(id: "contentWidthToggle", placement: .primaryAction) {
+                        Button {
+                            previewContentWide.toggle()
+                        } label: {
+                            Image(systemName: previewContentWide
+                                  ? "rectangle.3.group"
+                                  : "rectangle.dashed")
+                        }
+                        .help(previewContentWide ? "Normal Width (⌘W)" : "Widest Width (⌘W)")
+                    }
+                }
+
+                ToolbarItem(id: "outlineToggle", placement: .primaryAction) {
                     if appState.selectedFileID != nil {
                         Button {
                             toggleOutline()
@@ -110,6 +126,13 @@ struct ContentView: View {
                 .opacity(0)
                 .allowsHitTesting(false)
             if appState.selectedFileID != nil {
+                Button("") { toggleContentWidth() }
+                    .keyboardShortcut("w", modifiers: .command)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .allowsHitTesting(false)
+            }
+            if previewOnly {
                 Button("") { toggleOutline() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
                     .frame(width: 0, height: 0)
@@ -146,38 +169,13 @@ struct ContentView: View {
     }
 
     private func toggleOutline() {
-        guard appState.selectedFileID != nil, !isTogglingOutline else { return }
-        isTogglingOutline = true
+        guard appState.selectedFileID != nil else { return }
         if let panel = outlinePanel, panel.isVisible {
-            // Hide existing panel without closing. Keeping the panel alive
-            // avoids dealloc racing with SwiftUI internal dispatch sources
-            // that hold references into the NSHostingView.
             panel.orderOut(nil)
             appState.isOutlineVisible = false
-            // outlinePanel stays set — the panel is NOT deallocated
-        } else if let panel = outlinePanel {
-            panel.makeKeyAndOrderFront(nil)
-            if panel.isVisible {
-                panel.updateHeadings(appState.outlineHeadings)
-                appState.isOutlineVisible = true
-            } else {
-                // Panel was closed by the user's close button — create a new one.
-                // Defer the old panel's dealloc to avoid racing with SwiftUI
-                // internal dispatch sources.
-                appState.isOutlineVisible = true
-                let oldPanel = outlinePanel
-                outlinePanel = nil
-                openOutlinePanel()
-                DispatchQueue.main.async { [oldPanel] in
-                    _ = oldPanel
-                }
-            }
         } else {
             appState.isOutlineVisible = true
             openOutlinePanel()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.isTogglingOutline = false
         }
     }
 
@@ -191,7 +189,7 @@ struct ContentView: View {
             headings: appState.outlineHeadings,
             textView: { [viewRefs] in viewRefs.textView },
             webView: { [viewRefs] in viewRefs.webView },
-            onClose: { [appState] in appState.isOutlineVisible = false }
+            onClose: { [weak appState] in appState?.isOutlineVisible = false }
         )
         outlinePanel = panel
         panel.makeKeyAndOrderFront(nil)
@@ -218,6 +216,10 @@ struct ContentView: View {
         }
     }
 
+    private func toggleContentWidth() {
+        previewContentWide.toggle()
+    }
+
     private var sidebarContent: some View {
         SidebarView()
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 400)
@@ -235,7 +237,8 @@ struct ContentView: View {
             baseURL: appState.currentFileURL?.deletingLastPathComponent(),
             fileURL: appState.currentFileURL,
             fileID: appState.selectedFileID,
-            viewRefs: viewRefs
+            viewRefs: viewRefs,
+            previewContentWide: previewContentWide
         )
             .frame(minWidth: 200)
     }

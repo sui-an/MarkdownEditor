@@ -80,7 +80,6 @@ final class ImageDropTextView: NSTextView {
 final class EditorScrollView: NSScrollView {
     /// Last non-zero horizontal offset, updated on every user scroll.
     private var lastNonZeroHorizontalOffset: CGFloat = 0
-    /// Offset to re-apply if the text system resets it after deferred layout.
     private var pendingRestoreOffset: CGFloat = 0
 
     func clearPendingRestoreOffset() {
@@ -146,9 +145,6 @@ final class EditorScrollView: NSScrollView {
         super.setFrameSize(newSize)
 
         if oldWidth < 200, newSize.width >= 200 {
-            // Re-attach width tracking. The container already has the correct
-            // width from the collapse step and matches the new frame, so no
-            // re-layout happens and the scroll position is preserved.
             if let textView = documentView as? NSTextView, let container = textView.textContainer {
                 container.widthTracksTextView = true
             }
@@ -167,6 +163,61 @@ final class EditorScrollView: NSScrollView {
     }
 }
 
+// MARK: - Wrapper view: line numbers (left) + scroll view (right)
+
+final class EditorWrapperView: NSView {
+    let lineNumberView: LineNumberSideView
+    let scrollView: NSScrollView
+    let textView: NSTextView
+    private var scrollObserver: Any?
+    private var textChangeObserver: Any?
+
+    init(textView: NSTextView, scrollView: NSScrollView) {
+        self.textView = textView
+        self.scrollView = scrollView
+        self.lineNumberView = LineNumberSideView(textView: textView)
+        super.init(frame: .zero)
+
+        addSubview(lineNumberView)
+        addSubview(scrollView)
+
+        // Redraw line numbers on scroll
+        scrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.lineNumberView.needsDisplay = true
+        }
+
+        // Redraw line numbers on text change
+        textChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSText.didChangeNotification,
+            object: textView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.lineNumberView.needsDisplay = true
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let o = scrollObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = textChangeObserver { NotificationCenter.default.removeObserver(o) }
+    }
+
+    override func layout() {
+        super.layout()
+        let lineNumberWidth: CGFloat = 30
+        lineNumberView.frame = NSRect(x: 0, y: 0, width: lineNumberWidth, height: bounds.height)
+        scrollView.frame = NSRect(x: lineNumberWidth, y: 0,
+                                  width: bounds.width - lineNumberWidth, height: bounds.height)
+    }
+}
+
 // MARK: - NSViewRepresentable
 
 struct MarkdownTextView: NSViewRepresentable {
@@ -178,8 +229,8 @@ struct MarkdownTextView: NSViewRepresentable {
         Coordinator(self)
     }
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = EditorScrollView()
+    func makeNSView(context: Context) -> EditorWrapperView {
+        let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
@@ -245,46 +296,15 @@ struct MarkdownTextView: NSViewRepresentable {
         context.coordinator.textView = textView
         scrollView.documentView = textView
 
-        // Line number ruler
-        let ruler = LineNumberRulerView(textView: textView)
-        scrollView.verticalRulerView = ruler
-        scrollView.rulersVisible = true
+        textView.textContainerInset = NSSize(width: 4, height: 12)
 
-        scrollView.contentView.postsBoundsChangedNotifications = true
-        context.coordinator.scrollObserver = NotificationCenter.default.addObserver(
-            forName: NSView.boundsDidChangeNotification,
-            object: scrollView.contentView,
-            queue: .main
-        ) { _ in
-            ruler.needsDisplay = true
-        }
-
-        context.coordinator.textChangeObserver = NotificationCenter.default.addObserver(
-            forName: NSText.didChangeNotification,
-            object: textView,
-            queue: .main
-        ) { _ in
-            ruler.needsDisplay = true
-        }
-
-        // Text inset — horizontal padding + top spacing
-        textView.textContainerInset = NSSize(width: 8, height: 12)
-
-        // Disable automatic content insets so text exits cleanly at top,
-        // but manually account for the ruler width in left inset.
-        scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets(top: 0, left: ruler.ruleThickness, bottom: 0, right: 0)
-
-        return scrollView
+        return EditorWrapperView(textView: textView, scrollView: scrollView)
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? NSTextView else { return }
+    func updateNSView(_ wrapper: EditorWrapperView, context: Context) {
+        let textView = wrapper.textView
+        let scrollView = wrapper.scrollView
 
-        // Compare using clean markdown (without mutating text storage) so the
-        // binding's clean text matches the text view's content regardless of
-        // whether images are currently displayed as attachments (\u{FFFC}) or
-        // as markdown source.
         if let storage = textView.textStorage {
             let cleanCurrent = context.coordinator.buildCleanMarkdown(from: storage)
             if cleanCurrent == text {
@@ -296,7 +316,6 @@ struct MarkdownTextView: NSViewRepresentable {
             return
         }
 
-        // Text content changed externally — replace in text view
         context.coordinator.suppressTextDidChange = true
         let selectedRange = textView.selectedRange()
         textView.string = text
@@ -304,23 +323,14 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
         context.coordinator.suppressTextDidChange = false
         context.coordinator.scheduleImageProcessing()
-        // Focus cursor when opening a new empty note
         if text.isEmpty {
             textView.window?.makeFirstResponder(textView)
         }
-        // Scroll to top-left when switching to a different document.
-        // scrollRangeToVisible forces the layout manager to lay out the
-        // first character so the content size is correct. A deferred
-        // explicit scroll to (0,0) resets the horizontal position too,
-        // since scrollRangeToVisible only guarantees vertical visibility.
+        // Scroll to top-left when switching documents.
         if context.coordinator.lastFileURL != currentFileURL, !text.isEmpty {
-            if let editorScroll = scrollView as? EditorScrollView {
-                editorScroll.clearPendingRestoreOffset()
-            }
-            textView.scrollRangeToVisible(NSRange(location: 0, length: 1))
-            DispatchQueue.main.async { [scrollView] in
-                scrollView.contentView.scroll(to: .zero)
-            }
+            textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+            scrollView.contentView.scroll(to: .zero)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
         }
         context.coordinator.lastFileURL = currentFileURL
     }
@@ -331,8 +341,6 @@ struct MarkdownTextView: NSViewRepresentable {
         var parent: MarkdownTextView
         weak var textView: NSTextView?
         var suppressTextDidChange = false
-        var scrollObserver: Any?
-        var textChangeObserver: Any?
         /// Tracks the last opened file URL so we can detect document switches.
         var lastFileURL: URL?
         /// Cache of decoded NSImages keyed by URL string. Avoids re-decoding
@@ -356,10 +364,6 @@ struct MarkdownTextView: NSViewRepresentable {
             self.parent = parent
         }
 
-        deinit {
-            if let obs = scrollObserver { NotificationCenter.default.removeObserver(obs) }
-            if let obs = textChangeObserver { NotificationCenter.default.removeObserver(obs) }
-        }
 
         // MARK: - NSTextViewDelegate
 

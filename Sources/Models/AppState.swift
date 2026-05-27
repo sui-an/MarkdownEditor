@@ -513,15 +513,11 @@ final class AppState {
                 }
             }
 
-            if selectedFileURL == url && !FileManager.default.fileExists(atPath: url.path) {
-                DispatchQueue.main.async { [weak self] in
-                    self?.clearSelection()
-                }
-            }
-
             if selectedFileURL == url {
-                DispatchQueue.main.async { [weak self] in
-                    self?.promptExternalChange(for: url)
+                if FileManager.default.fileExists(atPath: url.path) {
+                    promptExternalChange(for: url)
+                } else {
+                    clearSelection()
                 }
             }
         }
@@ -566,6 +562,27 @@ final class AppState {
 
         let all = rootFolders[idx].allMarkdownFiles
         rootFolders[idx].children = all.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Break observation chains before deinit to prevent SwiftUI StoredLocation
+    /// recursive deallocation crashes during view hierarchy teardown.
+    /// Call when the owning view disappears or is about to be deallocated.
+    func cleanup() {
+        pendingHTMLWork?.cancel()
+        pendingHTMLWork = nil
+        pendingOutlineWork?.cancel()
+        pendingOutlineWork = nil
+        folderWatchers.values.forEach { $0.stop() }
+        folderWatchers.removeAll()
+        rootFolders.removeAll()
+        openFiles.removeAll()
+        fileContents.removeAll()
+        fileContentAccessOrder.removeAll()
+        fileSavedHashes.removeAll()
+        cachedContentHash.removeAll()
+        cachedHTML.removeAll()
+        cachedHTMLAccessOrder.removeAll()
+        htmlCache.removeAllObjects()
     }
 
     func promptExternalChange(for url: URL) {

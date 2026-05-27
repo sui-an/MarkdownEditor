@@ -9,7 +9,6 @@ final class OutlinePanelWindow: NSWindow {
     private let textViewProvider: () -> NSTextView?
     private let webViewProvider: () -> WKWebView?
     private let onClose: (() -> Void)?
-    private var isClosing = false
 
     init(headings: [HeadingItem], textView: @escaping () -> NSTextView?, webView: @escaping () -> WKWebView?, onClose: (() -> Void)? = nil) {
         self.textViewProvider = textView
@@ -45,22 +44,13 @@ final class OutlinePanelWindow: NSWindow {
         contentView = hosting
         level = .floating
         collectionBehavior = [.transient, .ignoresCycle]
+        // Keep the window alive after close so re-show via makeKeyAndOrderFront works.
+        isReleasedWhenClosed = false
         makeKeyAndOrderFront(nil)
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(windowWillClose),
-            name: NSWindow.willCloseNotification,
-            object: self
-        )
-    }
-
-    deinit {
-        NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: self)
     }
 
     func updateHeadings(_ headings: [HeadingItem]) {
-        guard isVisible, !isClosing else { return }
+        guard isVisible else { return }
         hostingView.rootView = OutlinePanelContent(
             headings: headings,
             textView: textViewProvider,
@@ -69,10 +59,13 @@ final class OutlinePanelWindow: NSWindow {
         hostingView.frame.size = hostingView.fittingSize
     }
 
-    @objc private func windowWillClose() {
-        guard !isClosing else { return }
-        isClosing = true
+    /// When the user clicks the close button, just hide the window instead of
+    /// releasing it.  The panel is owned by ContentView's @State outlinePanel
+    /// and will be deallocated when the view goes away.  Hiding instead of
+    /// closing allows makeKeyAndOrderFront to re-show it seamlessly.
+    override func close() {
         onClose?()
+        orderOut(nil)
     }
 }
 

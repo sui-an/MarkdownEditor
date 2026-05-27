@@ -197,6 +197,7 @@ struct PreviewWebView: NSViewRepresentable {
     let fileURL: URL?
     let fileID: UUID?
     var viewRefs: ViewRefs?
+    let previewContentWide: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -219,6 +220,7 @@ struct PreviewWebView: NSViewRepresentable {
 
         if context.coordinator.currentWebView !== webView {
             context.coordinator.currentWebView = webView
+            context.coordinator.lastPreviewContentWide = nil
             viewRefs?.webView = webView
 
             state.configureScrollView(webView)
@@ -251,6 +253,16 @@ struct PreviewWebView: NSViewRepresentable {
                     state.lastBodyHTML = bodyHTML
                     state.updateBodyViaJS(webView, bodyHTML: bodyHTML)
                 }
+                // Toggle content width based on previewContentWide setting
+                if context.coordinator.lastPreviewContentWide != previewContentWide {
+                    context.coordinator.lastPreviewContentWide = previewContentWide
+                    let maxWidth = previewContentWide ? "none" : "720px"
+                    let margin = previewContentWide ? "0" : "0 auto"
+                    webView.evaluateJavaScript("""
+                        document.body.style.maxWidth = "\(maxWidth)";
+                        document.body.style.margin = "\(margin)";
+                        """)
+                }
             } else if !html.isEmpty {
                 state.hasLoadedContent = true
                 state.needsScrollReset = true
@@ -269,6 +281,8 @@ struct PreviewWebView: NSViewRepresentable {
 
     final class Coordinator {
         var currentWebView: WKWebView?
+        /// Tracks the last previewContentWide value to avoid unnecessary JS evaluation.
+        var lastPreviewContentWide: Bool?
     }
 }
 
