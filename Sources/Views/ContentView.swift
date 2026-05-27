@@ -24,7 +24,6 @@ struct ContentView: View {
     @State private var appState = AppState()
     @State private var viewRefs = ViewRefs()
     @State private var didRestore = false
-    @State private var savedSidebarVis = 0
     @AppStorage("previewOnly") private var previewOnly = false
     @AppStorage("previewContentWide") private var previewContentWide = false
     @State private var outlinePanel: OutlinePanelWindow?
@@ -196,16 +195,7 @@ struct ContentView: View {
     }
 
     private func togglePreviewOnly() {
-        withAnimation(.easeInOut(duration: 0.2)) {
-            if previewOnly {
-                previewOnly = false
-                sidebarVis = savedSidebarVis
-            } else {
-                savedSidebarVis = sidebarVis
-                previewOnly = true
-                sidebarVis = visToInt(.detailOnly)
-            }
-        }
+        previewOnly.toggle()
     }
 
     private func toggleContentWidth() {
