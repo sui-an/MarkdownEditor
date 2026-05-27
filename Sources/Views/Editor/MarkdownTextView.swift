@@ -14,6 +14,18 @@ final class ImageDropTextView: NSTextView {
     var onImageDrop: ((URL) -> Void)?
     var onImagePaste: ((NSImage) -> Void)?
 
+    /// Pass Cmd+F through to the menu system so SwiftUI's .keyboardShortcut
+    /// (the custom search panel) can handle it, instead of NSTextView's
+    /// built-in find bar consuming the event on first press.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command),
+           let chars = event.charactersIgnoringModifiers,
+           chars == "f" {
+            return false
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard string.isEmpty else { return }

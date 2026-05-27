@@ -27,7 +27,8 @@ struct ContentView: View {
     @AppStorage("previewOnly") private var previewOnly = false
     @AppStorage("previewContentWide") private var previewContentWide = false
     @State private var outlinePanel: OutlinePanelWindow?
-    @State private var searchPanel: SearchPanelWindow?
+    @State private var searchPanel: SearchPanel?
+    @State private var showPreviewSearch = false
 
     /// Stored in UserDefaults so sidebar visibility survives app restarts.
     @AppStorage("sidebarVis") private var sidebarVis = 0
@@ -68,6 +69,20 @@ struct ContentView: View {
             }
             .onChange(of: appState.outlineHeadings) { _, headings in
                 outlinePanel?.updateHeadings(headings)
+            }
+            .overlay(alignment: .top) {
+                if previewOnly && showPreviewSearch {
+                    PreviewSearchOverlay(
+                        webView: { [viewRefs] in viewRefs.webView },
+                        viewRefs: viewRefs,
+                        onClose: {
+                            showPreviewSearch = false
+                        }
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .animation(.easeInOut(duration: 0.15), value: showPreviewSearch)
+                    .zIndex(100)
+                }
             }
             .toolbar(id: "main") {
                 ToolbarItem(id: "newNote", placement: .navigation) {
@@ -142,29 +157,23 @@ struct ContentView: View {
     }
 
     private func toggleSearch() {
-        appState.searchState.isVisible.toggle()
-        if appState.searchState.isVisible {
-            openSearchPanel()
+        if previewOnly {
+            showPreviewSearch = true
         } else {
-            closeSearchPanel()
+            if searchPanel?.isVisible == true {
+                searchPanel?.close()
+                searchPanel = nil
+            } else {
+                searchPanel?.close()
+                let panel = SearchPanel(
+                    searchState: appState.searchState,
+                    textView: { [viewRefs] in viewRefs.textView },
+                    webView: { [viewRefs] in viewRefs.webView },
+                    viewRefs: viewRefs
+                )
+                searchPanel = panel
+            }
         }
-    }
-
-    private func openSearchPanel() {
-        closeSearchPanel()
-        NSApp.activate(ignoringOtherApps: true)
-        let panel = SearchPanelWindow(
-            searchState: appState.searchState,
-            textView: { [viewRefs] in viewRefs.textView },
-            webView: { [viewRefs] in viewRefs.webView }
-        )
-        searchPanel = panel
-        panel.makeKeyAndOrderFront(nil)
-    }
-
-    private func closeSearchPanel() {
-        searchPanel?.close()
-        searchPanel = nil
     }
 
     private func toggleOutline() {

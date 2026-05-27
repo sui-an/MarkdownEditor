@@ -39,13 +39,47 @@ final class WebViewState: NSObject, WKNavigationDelegate {
         }
     }
 
-    func updateBodyViaJS(_ webView: WKWebView, bodyHTML: String) {
+    func updateBodyViaJS(_ webView: WKWebView, bodyHTML: String, searchQuery: String = "") {
         guard let encoded = try? JSONEncoder().encode(bodyHTML),
               let jsonStr = String(data: encoded, encoding: .utf8) else { return }
+        let escapedQuery = (try? JSONEncoder().encode(searchQuery))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
         webView.evaluateJavaScript("""
         document.getElementById('md-content').innerHTML = \(jsonStr);
         if (typeof hljs !== 'undefined') hljs.highlightAll();
         if (typeof mermaid !== 'undefined') mermaid.run({ querySelector: '.mermaid' });
+        (function() {
+            var q = \(escapedQuery);
+            if (!q) return;
+            var lowerQ = q.toLowerCase();
+            var walker = document.createTreeWalker(document.getElementById('md-content'), NodeFilter.SHOW_TEXT, null, false);
+            var nodes = [];
+            while (walker.nextNode()) { nodes.push(walker.currentNode); }
+            for (var n = 0; n < nodes.length; n++) {
+                var node = nodes[n];
+                var text = node.textContent;
+                var lower = text.toLowerCase();
+                var idx = 0;
+                var fragments = [];
+                var lastEnd = 0;
+                while ((idx = lower.indexOf(lowerQ, idx)) !== -1) {
+                    if (idx > lastEnd) fragments.push(document.createTextNode(text.substring(lastEnd, idx)));
+                    var mark = document.createElement('mark');
+                    mark.className = 'search-result';
+                    mark.textContent = text.substring(idx, idx + q.length);
+                    fragments.push(mark);
+                    idx += q.length;
+                    lastEnd = idx;
+                }
+                if (lastEnd < text.length) fragments.push(document.createTextNode(text.substring(lastEnd)));
+                if (fragments.length > 0) {
+                    var parent = node.parentNode;
+                    var span = document.createElement('span');
+                    fragments.forEach(function(f) { span.appendChild(f); });
+                    parent.replaceChild(span, node);
+                }
+            }
+        })();
         """)
     }
 
@@ -240,7 +274,7 @@ struct PreviewWebView: NSViewRepresentable {
                 // (which causes a WKWebView page-reload flash). Just inject the body.
                 if !bodyHTML.isEmpty {
                     state.lastBodyHTML = bodyHTML
-                    state.updateBodyViaJS(webView, bodyHTML: bodyHTML)
+                    state.updateBodyViaJS(webView, bodyHTML: bodyHTML, searchQuery: viewRefs?.lastSearchQuery ?? "")
                 }
             } else if !html.isEmpty {
                 state.hasLoadedContent = true
@@ -251,7 +285,7 @@ struct PreviewWebView: NSViewRepresentable {
             if state.hasLoadedContent {
                 if !bodyHTML.isEmpty && bodyHTML != state.lastBodyHTML {
                     state.lastBodyHTML = bodyHTML
-                    state.updateBodyViaJS(webView, bodyHTML: bodyHTML)
+                    state.updateBodyViaJS(webView, bodyHTML: bodyHTML, searchQuery: viewRefs?.lastSearchQuery ?? "")
                 }
                 // Toggle content width based on previewContentWide setting
                 if context.coordinator.lastPreviewContentWide != previewContentWide {

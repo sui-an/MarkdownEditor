@@ -406,6 +406,12 @@ enum MarkdownParser {
         strong { font-weight: 600; }
         em { font-style: italic; }
         del { text-decoration: line-through; opacity: 0.6; }
+        mark.search-result { background: rgba(255, 200, 0, 0.45); border-radius: 2px; }
+        mark.search-result.current-match { background: rgba(255, 150, 0, 0.7); border-radius: 2px; outline: 2px solid rgba(255, 150, 0, 0.8); }
+        @media (prefers-color-scheme: dark) {
+            mark.search-result { background: rgba(255, 200, 0, 0.3); }
+            mark.search-result.current-match { background: rgba(255, 180, 0, 0.55); outline: 2px solid rgba(255, 180, 0, 0.7); }
+        }
         .mermaid {
             text-align: center;
             margin: 20px 0;

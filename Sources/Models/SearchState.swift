@@ -94,10 +94,14 @@ final class SearchState {
         guard let storage = textView?.textStorage else { return }
         let range = NSRange(location: 0, length: storage.length)
         storage.removeAttribute(.backgroundColor, range: range)
+        for lm in storage.layoutManagers {
+            lm.invalidateDisplay(forCharacterRange: range)
+        }
     }
 
     private func applyHighlights(textView: NSTextView?) {
         guard let storage = textView?.textStorage, !matches.isEmpty else { return }
+        let fullRange = NSRange(location: 0, length: storage.length)
         for (index, range) in matches.enumerated() {
             guard range.location + range.length <= storage.length else { continue }
             if index == currentMatchIndex {
@@ -105,6 +109,9 @@ final class SearchState {
             } else {
                 storage.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.35), range: range)
             }
+        }
+        for lm in storage.layoutManagers {
+            lm.invalidateDisplay(forCharacterRange: fullRange)
         }
     }
 

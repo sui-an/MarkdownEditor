@@ -8,4 +8,7 @@ import WebKit
 final class ViewRefs {
     weak var textView: NSTextView?
     weak var webView: WKWebView?
+    /// Current search query, kept so updateBodyViaJS can re-highlight after
+    /// replacing innerHTML (which wipes out <mark> elements).
+    var lastSearchQuery: String = ""
 }
