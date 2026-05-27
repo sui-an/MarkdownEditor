@@ -201,13 +201,12 @@ brew install cmark-gfm
 bash build.sh   # Rebuild — the script auto-detects Homebrew installations
 ```
 
-## License
-
-MITrmaid JS injection
+Mermaid JS injection
+```
 Resources/
 ├── Info.plist
 ├── Assets.xcassets/AppIcon.appiconset/
-└── mermaid.min.js                   # Download separately (run download_mermaid.sh)
+└── mermaid.min.js         # Download separately (run download_mermaid.sh)
 ```
 
 ## Keyboard Shortcuts
