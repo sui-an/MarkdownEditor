@@ -2,6 +2,8 @@
 
 A native macOS Markdown editor styled after Apple Notes, with live preview, syntax highlighting, Mermaid diagram support, and image drag-and-drop.
 
+<img width="1512" height="859" alt="PixPin_2026-05-27_20-56-07" src="https://github.com/user-attachments/assets/aef8956a-4654-4a88-a6e8-f2efb854fa28" />
+
 ## Features
 
 - **Three-pane layout** — Sidebar (file browser) | Editor (source) | Preview (rendered HTML)
