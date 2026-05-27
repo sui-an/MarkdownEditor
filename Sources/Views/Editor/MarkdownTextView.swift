@@ -275,7 +275,10 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.isRichText = true
         textView.usesFontPanel = false
         textView.textColor = NSColor.textColor
-        textView.backgroundColor = bg
+        // Don't draw the NSTextView background ourselves — let the scroll
+        // view's dynamic backgroundColor handle it. This ensures the bg
+        // properly adapts to light/dark appearance changes.
+        textView.drawsBackground = false
         textView.isEditable = true
         textView.isSelectable = true
         textView.enabledTextCheckingTypes = 0
@@ -582,18 +585,33 @@ struct MarkdownTextView: NSViewRepresentable {
             // has \u{FFFC} after processInlineImages ran) so that subsequent
             // pastes correctly include previous images' markdown syntax.
             let clean = buildCleanMarkdown(from: storage)
-            let cursor = textView.selectedRange().location
+            let storageCursor = textView.selectedRange().location
             let current = clean as NSString
 
+            // Map cursor from storage coordinates to clean-markdown coordinates.
+            // Each \u{FFFC} attachment char (1 byte) expands to a full
+            // markdown string in `clean`, so we add the expansion delta for
+            // every attachment that lies before the cursor.
+            var cleanCursor = storageCursor
+            if storageCursor > 0, storage.length > 0 {
+                let enumerateRange = NSRange(location: 0, length: min(storageCursor, storage.length))
+                storage.enumerateAttribute(.attachment, in: enumerateRange, options: []) { value, range, _ in
+                    if let att = value as? MarkdownImageAttachment {
+                        let expansion = (att.markdownSource as NSString).length - range.length
+                        if expansion > 0 { cleanCursor += expansion }
+                    }
+                }
+            }
+
             var insertion = result.markdownSyntax
-            if cursor > 0 && current.length > 0 {
-                let prevChar = current.substring(with: NSRange(location: cursor - 1, length: 1))
+            if cleanCursor > 0 && current.length > 0 {
+                let prevChar = current.substring(with: NSRange(location: cleanCursor - 1, length: 1))
                 if prevChar != "\n" {
                     insertion = "\n" + insertion
                 }
             }
-            if cursor < current.length {
-                let nextChar = current.substring(with: NSRange(location: cursor, length: 1))
+            if cleanCursor < current.length {
+                let nextChar = current.substring(with: NSRange(location: cleanCursor, length: 1))
                 if nextChar != "\n" {
                     insertion = insertion + "\n"
                 }
@@ -601,15 +619,28 @@ struct MarkdownTextView: NSViewRepresentable {
                 insertion = insertion + "\n"
             }
 
-            let newText = (clean as NSString).replacingCharacters(in: NSRange(location: cursor, length: 0), with: insertion)
-            let insertEnd = cursor + (insertion as NSString).length
+            let newText = current.replacingCharacters(in: NSRange(location: cleanCursor, length: 0), with: insertion)
+
+            // Register undo so Cmd+Z can revert the paste.
+            let oldText = clean
+            textView.undoManager?.registerUndo(withTarget: self) { target in
+                target.suppressTextDidChange = true
+                target.textView?.string = oldText
+                target.suppressTextDidChange = false
+                DispatchQueue.main.async {
+                    target.parent.text = oldText
+                }
+            }
 
             suppressTextDidChange = true
             textView.string = newText
             // Process immediately so images appear in the same frame.
             NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(self.processInlineImages), object: nil)
             processInlineImages()
-            textView.setSelectedRange(NSRange(location: insertEnd, length: 0))
+            // After processing, images are \u{FFFC} — set cursor to end of storage.
+            if let storage = textView.textStorage {
+                textView.setSelectedRange(NSRange(location: storage.length, length: 0))
+            }
             suppressTextDidChange = false
 
             DispatchQueue.main.async {
