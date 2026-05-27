@@ -8,13 +8,51 @@ final class LineNumberSideView: NSView {
     private let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
     private let textColor = NSColor.secondaryLabelColor
 
+    // Newline position cache for O(log n) line number lookup
+    private var newlinePositions: [Int] = []
+    private var cachedTextLength: Int = 0
+    private var textChangeObserver: Any?
+
     init(textView: NSTextView) {
         self.textView = textView
         super.init(frame: .zero)
+        textChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSText.didChangeNotification,
+            object: textView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.invalidateNewlineCache()
+        }
+    }
+
+    deinit {
+        if let o = textChangeObserver { NotificationCenter.default.removeObserver(o) }
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    private func invalidateNewlineCache() {
+        cachedTextLength = 0
+        newlinePositions.removeAll()
+        needsDisplay = true
+    }
+
+    private func ensureNewlineCache() {
+        guard let textView = textView else { return }
+        let text = textView.string as NSString
+        let currentLength = text.length
+        guard cachedTextLength != currentLength else { return }
+
+        var positions: [Int] = []
+        for i in 0..<currentLength {
+            if text.character(at: i) == 0x0A {
+                positions.append(i)
+            }
+        }
+        newlinePositions = positions
+        cachedTextLength = currentLength
     }
 
     override var isFlipped: Bool { true }
@@ -53,12 +91,22 @@ final class LineNumberSideView: NSView {
         )
         guard charRange.location != NSNotFound, charRange.location < textLength else { return }
 
-        var lineNumber = 1
-        let scanEnd = min(charRange.location, textLength)
-        for i in 0..<scanEnd {
-            if textContent.character(at: i) == 0x0A {
-                lineNumber += 1
+        ensureNewlineCache()
+        // Binary search: find how many newline positions are before charRange.location
+        let lineNumber: Int
+        if charRange.location == 0 {
+            lineNumber = 1
+        } else {
+            var lo = 0, hi = newlinePositions.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if newlinePositions[mid] < charRange.location {
+                    lo = mid + 1
+                } else {
+                    hi = mid
+                }
             }
+            lineNumber = lo + 1
         }
 
         let paraStyle = NSMutableParagraphStyle()

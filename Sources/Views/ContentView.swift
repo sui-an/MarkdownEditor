@@ -196,21 +196,13 @@ struct ContentView: View {
     }
 
     private func togglePreviewOnly() {
-        if previewOnly {
-            previewOnly = false
-            // Restore sidebar without animation to avoid layout conflict
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if previewOnly {
+                previewOnly = false
                 sidebarVis = savedSidebarVis
-            }
-        } else {
-            savedSidebarVis = sidebarVis
-            previewOnly = true
-            // Hide sidebar without animation to avoid layout conflict
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
+            } else {
+                savedSidebarVis = sidebarVis
+                previewOnly = true
                 sidebarVis = visToInt(.detailOnly)
             }
         }
