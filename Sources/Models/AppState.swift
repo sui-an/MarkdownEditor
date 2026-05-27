@@ -172,6 +172,11 @@ final class AppState {
         if selectedFileID == id {
             clearSelection()
         }
+        // If no files left, clear the session bookmark so next launch starts
+        // with empty state instead of restoring a file the user closed.
+        if openFiles.isEmpty {
+            SessionRestoreService.clearLastOpened()
+        }
         WebViewCache.shared.remove(for: id)
     }
 

@@ -11,4 +11,18 @@ build/
 .vscode/
 .idea/
 generate_icon.py
+
+# AI tooling
+.claude/
+.sisyphus/
+
+# Build artifacts
+MarkdownEditor.dmg
+MarkdownEditor.xcodeproj/
+
+# Development docs
+docs/
+
+# Downloaded JS dependencies (re-downloaded by build.sh)
 Resources/mermaid.min.js
+Resources/highlight.min.js

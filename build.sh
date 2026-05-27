@@ -133,7 +133,6 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Views/ResizableHSplitView.swift"
   "$PROJECT_DIR/Sources/Views/InlineSearchView.swift"
   "$PROJECT_DIR/Sources/Views/Editor/EditorContainerView.swift"
-  "$PROJECT_DIR/Sources/Views/Editor/LineNumberRulerView.swift"
   "$PROJECT_DIR/Sources/Views/Editor/LineNumberSideView.swift"
   "$PROJECT_DIR/Sources/Views/Editor/MarkdownTextStorage.swift"
   "$PROJECT_DIR/Sources/Views/Editor/MarkdownTextView.swift"
@@ -169,7 +168,11 @@ if [ -n "$CMARK_LIB" ]; then
   fi
 fi
 
-# 6. Ad-hoc code sign
+# 6. Strip debug symbols (safe for release, keeps code signatures intact)
+echo "==> Stripping binary ..."
+strip -S "$APP_BUNDLE/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+
+# 7. Ad-hoc code sign
 echo "==> Code signing ..."
 codesign --force --deep --sign - "$APP_BUNDLE"
 

@@ -34,9 +34,6 @@ enum FileService {
         var dirCache: [URL: FileTreeItem] = [url: root]
 
         for case let fileURL as URL in enumerator {
-            let relPath = fileURL.path.replacingOccurrences(of: url.path + "/", with: "")
-            let components = relPath.components(separatedBy: "/")
-
             let parentURL = fileURL.deletingLastPathComponent()
             guard let parentItem = dirCache[parentURL] else { continue }
 
@@ -57,11 +54,8 @@ enum FileService {
 
                 if parentItem.url == url {
                     children.append(dirItem)
-                } else {
-                    var p = parentItem
-                    if let idx = children.firstIndex(where: { $0.url == parentItem.url }) {
-                        children[idx].children?.append(dirItem)
-                    }
+                } else if let idx = children.firstIndex(where: { $0.url == parentItem.url }) {
+                    children[idx].children?.append(dirItem)
                 }
             } else if fileURL.pathExtension.lowercased() == "md" {
                 let fileItem = FileTreeItem(
