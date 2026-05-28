@@ -138,16 +138,13 @@ struct ContentView: View {
                         sidebarVis = sidebarVis == 3 ? 1 : 3
                     } label: {
                         Image(systemName: "sidebar.left")
-                            .font(.system(size: 14))
                             .foregroundStyle(.secondary)
                     }
                     .help("Toggle Sidebar (⌘⌥S)")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: 20)
-                    .padding(.leading, 12)
+                    .padding(.leading, 4)
                 }
 
-                ToolbarItem(id: "newNote", placement: .navigation) {
+                ToolbarItem(id: "newNote", placement: .automatic) {
                     Button {
                         appState.createNewNote()
                     } label: {
@@ -156,9 +153,6 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                     }
                     .help("New Note (⌘N)")
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .frame(height: 20)
-                    .padding(.trailing, 36)
                 }
 
                 if previewOnly {
