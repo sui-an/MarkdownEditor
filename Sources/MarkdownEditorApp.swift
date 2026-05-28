@@ -132,6 +132,10 @@ struct MarkdownEditorApp: App {
             // View menu
             CommandGroup(before: .toolbar) {
                 TogglePreviewCommand()
+
+                Divider()
+
+                ThemePickerCommand()
             }
         }
     }
@@ -211,5 +215,19 @@ struct TogglePreviewCommand: View {
             previewOnly.toggle()
         }
         .keyboardShortcut("p", modifiers: [.command, .shift])
+    }
+}
+
+// MARK: - Theme
+
+struct ThemePickerCommand: View {
+    @AppStorage("themeMode") private var themeMode: String = "system"
+
+    var body: some View {
+        Picker("Appearance", selection: $themeMode) {
+            Text("System").tag("system")
+            Text("Light").tag("light")
+            Text("Dark").tag("dark")
+        }
     }
 }
