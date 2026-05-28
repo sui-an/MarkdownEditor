@@ -138,21 +138,26 @@ struct ContentView: View {
                         sidebarVis = sidebarVis == 3 ? 1 : 3
                     } label: {
                         Image(systemName: "sidebar.left")
+                            .font(.system(size: 13, weight: .medium))
                     }
+                    .buttonStyle(.plain)
                     .help("Toggle Sidebar (⌘⌥S)")
-                    .padding(.leading, -60)
+                    .padding(.leading, -80)
                 }
 
                 ToolbarItem(id: "newNote", placement: .navigation) {
-                    Button {
-                        appState.createNewNote()
-                    } label: {
-                        Image(systemName: "square.and.pencil")
+                    HStack {
+                        Spacer()
+                        Button {
+                            appState.createNewNote()
+                        } label: {
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .help("New Note (⌘N)")
                     }
-                    .help("New Note (⌘N)")
                 }
-
-
 
                 if previewOnly {
                     ToolbarItem(id: "contentWidthToggle", placement: .primaryAction) {
