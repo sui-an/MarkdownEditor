@@ -134,32 +134,30 @@ struct ContentView: View {
             }
             .toolbar(id: "main") {
                 ToolbarItem(id: "sidebarToggle", placement: .navigation) {
-                    HStack {
-                        Button {
-                            sidebarVis = sidebarVis == 3 ? 1 : 3
-                        } label: {
-                            Image(systemName: "sidebar.left")
-                                .font(.system(size: 14))
-                                .foregroundStyle(.secondary)
-                        }
-                        .help("Toggle Sidebar (⌘⌥S)")
-                        Spacer(minLength: 0)
+                    Button {
+                        sidebarVis = sidebarVis == 3 ? 1 : 3
+                    } label: {
+                        Image(systemName: "sidebar.left")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
                     }
+                    .help("Toggle Sidebar (⌘⌥S)")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: 20)
                     .padding(.leading, 12)
                 }
 
                 ToolbarItem(id: "newNote", placement: .navigation) {
-                    HStack {
-                        Spacer(minLength: 0)
-                        Button {
-                            appState.createNewNote()
-                        } label: {
-                            Image(systemName: "square.and.pencil")
-                                .font(.system(size: 14))
-                                .foregroundStyle(.secondary)
-                        }
-                        .help("New Note (⌘N)")
+                    Button {
+                        appState.createNewNote()
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
                     }
+                    .help("New Note (⌘N)")
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .frame(height: 20)
                     .padding(.trailing, 36)
                 }
 
