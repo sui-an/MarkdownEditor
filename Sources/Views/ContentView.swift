@@ -60,12 +60,13 @@ struct ContentView: View {
                     minLeftWidth: 200,
                     minRightWidth: 200,
                     collapsed: previewOnly,
-                    left: { editorContent },
-                    right: { previewContent }
+                    left: editorContent,
+                    right: previewContent
                 )
             }
             .navigationSplitViewStyle(.prominentDetail)
             .navigationTitle(windowTitle)
+            .animation(.none, value: sidebarVis)
             .environment(appState)
             .focusedSceneValue(\.currentAppState, appState)
             .onAppear {
@@ -129,9 +130,13 @@ struct ContentView: View {
             .toolbar(id: "main") {
                 ToolbarItem(id: "sidebarToggle", placement: .navigation) {
                     Button {
-                        sidebarVis = sidebarVis == 3 ? 1 : 3
+                        var t = Transaction()
+                        t.disablesAnimations = true
+                        withTransaction(t) {
+                            sidebarVis = sidebarVis == 3 ? 1 : 3
+                        }
                     } label: {
-                        Image(systemName: "sidebar.left")
+                        Image(systemName: sidebarVis == 3 ? "sidebar.left" : "sidebar.right")
                             .foregroundStyle(.secondary)
                     }
                     .help("Toggle Sidebar (⌘⌥S)")
@@ -189,6 +194,15 @@ struct ContentView: View {
             }
 
             // Hidden keyboard shortcut handlers
+            Button("") {
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { sidebarVis = sidebarVis == 3 ? 1 : 3 }
+            }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .allowsHitTesting(false)
             Button("") { toggleSearch() }
                 .keyboardShortcut("f", modifiers: .command)
                 .frame(width: 0, height: 0)

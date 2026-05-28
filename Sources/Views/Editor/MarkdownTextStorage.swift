@@ -16,13 +16,16 @@ final class MarkdownTextStorage: NSTextStorage {
         pattern: #"^>\s.*$"#, options: .anchorsMatchLines
     )
     private static let codeBlockRegex = try! NSRegularExpression(
-        pattern: #"```[\s\S]*?```"#, options: []
+        pattern: #"(?m)^```[\s\S]*?^```"#, options: []
     )
     private static let boldRegex = try! NSRegularExpression(
         pattern: #"\*\*(.+?)\*\*"#, options: []
     )
-    private static let italicRegex = try! NSRegularExpression(
-        pattern: #"(\*|_)(.+?)\1"#, options: []
+    private static let italicStarRegex = try! NSRegularExpression(
+        pattern: #"\*(.+?)\*"#, options: []
+    )
+    private static let italicUnderscoreRegex = try! NSRegularExpression(
+        pattern: #"\b_(.+?)_\b"#, options: []
     )
     private static let linkRegex = try! NSRegularExpression(
         pattern: #"\[(.+?)\]\((.+?)\)"#, options: []
@@ -236,9 +239,14 @@ final class MarkdownTextStorage: NSTextStorage {
                 backingStore.addAttribute(.foregroundColor, value: HighlightColors.bold, range: match.range(at: 1))
             }
         }
-        for match in Self.italicRegex.matches(in: text as String, range: searchRange) {
-            if match.range(at: 2).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic, range: match.range(at: 2))
+        for match in Self.italicStarRegex.matches(in: text as String, range: searchRange) {
+            if match.range(at: 1).location != NSNotFound {
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic, range: match.range(at: 1))
+            }
+        }
+        for match in Self.italicUnderscoreRegex.matches(in: text as String, range: searchRange) {
+            if match.range(at: 1).location != NSNotFound {
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic, range: match.range(at: 1))
             }
         }
         for match in Self.linkRegex.matches(in: text as String, range: searchRange) {

@@ -9,8 +9,8 @@ struct ResizableHSplitView<Left: View, Right: View>: View {
     let minLeftWidth: CGFloat
     let minRightWidth: CGFloat
     var collapsed: Bool = false
-    @ViewBuilder let left: Left
-    @ViewBuilder let right: Right
+    let left: Left
+    let right: Right
 
     private var isActive: Bool { isDragging || isHovering }
 
