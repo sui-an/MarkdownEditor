@@ -26,12 +26,21 @@ struct ContentView: View {
     @State private var didRestore = false
     @AppStorage("previewOnly") private var previewOnly = false
     @AppStorage("previewContentWide") private var previewContentWide = false
+    @AppStorage("themeMode") private var themeMode: String = "system"
     @State private var outlinePanel: OutlinePanelWindow?
     @State private var searchPanel: SearchPanel?
     @State private var showPreviewSearch = false
 
     /// Stored in UserDefaults so sidebar visibility survives app restarts.
     @AppStorage("sidebarVis") private var sidebarVis = 0
+
+    private var preferredColorScheme: ColorScheme? {
+        switch themeMode {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
+    }
 
     private var columnVisibility: Binding<NavigationSplitViewVisibility> {
         Binding(
@@ -90,6 +99,7 @@ struct ContentView: View {
             .onDisappear {
                 appState.cleanup()
             }
+            .preferredColorScheme(preferredColorScheme)
             .onChange(of: appState.outlineHeadings) { _, headings in
                 outlinePanel?.updateHeadings(headings)
             }
