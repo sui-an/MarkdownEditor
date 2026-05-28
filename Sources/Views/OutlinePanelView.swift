@@ -50,7 +50,6 @@ final class OutlinePanelWindow: NSWindow {
     }
 
     func updateHeadings(_ headings: [HeadingItem]) {
-        guard isVisible else { return }
         hostingView.rootView = OutlinePanelContent(
             headings: headings,
             textView: textViewProvider,
