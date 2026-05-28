@@ -183,6 +183,7 @@ final class EditorWrapperView: NSView {
     let textView: NSTextView
     private var scrollObserver: Any?
     private var textChangeObserver: Any?
+    private var lastLayoutTime: TimeInterval = 0
 
     init(textView: NSTextView, scrollView: NSScrollView) {
         self.textView = textView
@@ -227,6 +228,20 @@ final class EditorWrapperView: NSView {
         lineNumberView.frame = NSRect(x: 0, y: 0, width: lineNumberWidth, height: bounds.height)
         scrollView.frame = NSRect(x: lineNumberWidth, y: 0,
                                   width: bounds.width - lineNumberWidth, height: bounds.height)
+
+        let now = CACurrentMediaTime()
+        let interval = now - lastLayoutTime
+        lastLayoutTime = now
+        if let tc = textView.textContainer, interval > 0, interval < 0.08 {
+            tc.widthTracksTextView = false
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(restoreTrack), object: nil)
+            perform(#selector(restoreTrack), with: nil, afterDelay: 0.25)
+        }
+    }
+
+    @objc private func restoreTrack() {
+        textView.textContainer?.widthTracksTextView = true
+        needsLayout = true
     }
 }
 

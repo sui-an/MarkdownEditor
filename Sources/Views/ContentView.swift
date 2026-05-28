@@ -66,7 +66,7 @@ struct ContentView: View {
             }
             .navigationSplitViewStyle(.prominentDetail)
             .navigationTitle(windowTitle)
-            .animation(.easeInOut(duration: 0.22), value: sidebarVis)
+            .animation(.none, value: sidebarVis)
             .environment(appState)
             .focusedSceneValue(\.currentAppState, appState)
             .onAppear {
