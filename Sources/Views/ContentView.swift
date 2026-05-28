@@ -139,11 +139,13 @@ struct ContentView: View {
                             sidebarVis = sidebarVis == 3 ? 1 : 3
                         } label: {
                             Image(systemName: "sidebar.left")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
                         }
                         .help("Toggle Sidebar (⌘⌥S)")
                         Spacer(minLength: 0)
                     }
-                    .padding(.leading, 10)
+                    .padding(.leading, 12)
                 }
 
                 ToolbarItem(id: "newNote", placement: .navigation) {
@@ -153,10 +155,12 @@ struct ContentView: View {
                             appState.createNewNote()
                         } label: {
                             Image(systemName: "square.and.pencil")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
                         }
                         .help("New Note (⌘N)")
                     }
-                    .padding(.trailing, 30)
+                    .padding(.trailing, 36)
                 }
 
                 if previewOnly {
