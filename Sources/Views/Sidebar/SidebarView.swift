@@ -3,11 +3,23 @@ import AppKit
 
 struct SidebarView: View {
     @Environment(AppState.self) private var appState
+    @AppStorage("sidebarVis") private var sidebarVis = 0
 
     var body: some View {
         VStack(spacing: 0) {
-            // Action buttons: Open File | Open Folder (vertical)
-            VStack(spacing: 2) {
+            HStack(spacing: 4) {
+                Button {
+                    sidebarVis = sidebarVis == 3 ? 1 : 3
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Toggle Sidebar (⌘⌥S)")
+
+                Spacer()
+
                 SidebarActionButton(
                     icon: "doc.badge.plus",
                     label: "Open File",
@@ -19,7 +31,6 @@ struct SidebarView: View {
                     action: openFolderDialog
                 )
             }
-            .buttonStyle(.plain)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
 

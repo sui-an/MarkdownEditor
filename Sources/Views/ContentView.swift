@@ -118,15 +118,6 @@ struct ContentView: View {
                 }
             }
             .toolbar(id: "main") {
-                ToolbarItem(id: "sidebarToggle", placement: .navigation) {
-                    Button {
-                        toggleSidebar()
-                    } label: {
-                        Image(systemName: "sidebar.left")
-                    }
-                    .help("Toggle Sidebar (⌘⌥S)")
-                }
-
                 ToolbarItem(id: "newNote", placement: .navigation) {
                     Button {
                         appState.createNewNote()
@@ -196,10 +187,6 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
         }
-    }
-
-    private func toggleSidebar() {
-        sidebarVis = sidebarVis == 3 ? 1 : 3
     }
 
     private func toggleSearch() {
