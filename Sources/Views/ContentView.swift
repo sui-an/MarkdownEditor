@@ -144,7 +144,7 @@ struct ContentView: View {
                     .padding(.leading, 4)
                 }
 
-                ToolbarItem(id: "newNote", placement: .automatic) {
+                ToolbarItem(id: "newNote", placement: .navigation) {
                     Button {
                         appState.createNewNote()
                     } label: {
