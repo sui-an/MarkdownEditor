@@ -129,6 +129,8 @@ struct MarkdownEditorApp: App {
                 SaveCommand()
             }
 
+            SidebarCommands()
+
             // View menu
             CommandGroup(before: .toolbar) {
                 TogglePreviewCommand()
