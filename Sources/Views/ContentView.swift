@@ -134,22 +134,25 @@ struct ContentView: View {
             }
             .toolbar(id: "main") {
                 ToolbarItem(id: "sidebarToggle", placement: .navigation) {
-                    Button {
-                        sidebarVis = sidebarVis == 3 ? 1 : 3
-                    } label: {
-                        Image(systemName: "sidebar.left")
+                    HStack(spacing: 0) {
+                        Button {
+                            sidebarVis = sidebarVis == 3 ? 1 : 3
+                        } label: {
+                            Image(systemName: "sidebar.left")
+                        }
+                        .help("Toggle Sidebar (⌘⌥S)")
+
+                        Button {
+                            appState.createNewNote()
+                        } label: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .help("New Note (⌘N)")
                     }
-                    .help("Toggle Sidebar (⌘⌥S)")
+                    .padding(.leading, -10)
                 }
 
-                ToolbarItem(id: "newNote", placement: .navigation) {
-                    Button {
-                        appState.createNewNote()
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                    }
-                    .help("New Note (⌘N)")
-                }
+
 
                 if previewOnly {
                     ToolbarItem(id: "contentWidthToggle", placement: .primaryAction) {
