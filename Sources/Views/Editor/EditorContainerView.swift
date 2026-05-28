@@ -3,13 +3,15 @@ import SwiftUI
 struct EditorContainerView: View {
     @Environment(AppState.self) private var appState
     var viewRefs: ViewRefs?
+    var themeMode: String = "system"
 
     var body: some View {
         if appState.selectedFileID != nil {
             MarkdownTextView(
                 text: Bindable(appState).currentFileContent,
                 currentFileURL: appState.currentFileURL,
-                viewRefs: viewRefs
+                viewRefs: viewRefs,
+                themeMode: themeMode
             )
             .onChange(of: appState.currentFileContent) { _, newValue in
                 appState.updateContent(newValue)

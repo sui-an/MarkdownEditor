@@ -107,17 +107,96 @@ final class MarkdownTextStorage: NSTextStorage {
         }
     }
 
+    /// Force re-highlight the entire document. Called when the app appearance
+    /// changes (light↔dark) so syntax colors re-resolve with the correct palette.
+    /// Pass `isDark` to explicitly choose the palette without relying on
+    /// `NSApp.effectiveAppearance` (which may not have propagated yet).
+    func rehighlightAll(isDark: Bool? = nil) {
+        let length = backingStore.length
+        guard length > 0 else { return }
+
+        // If the caller specified a palette, set it before re-highlighting
+        // so that HighlightColors picks it up.
+        if let isDark {
+            Self._forceDarkMode = isDark
+        }
+
+        let fullRange = NSRange(location: 0, length: length)
+        backingStore.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
+
+        let text = backingStore.string as NSString
+        let textLength = text.length
+        highlightHeaders(in: text, length: textLength)
+        highlightBlockquotes(in: text, length: textLength)
+        highlightCodeBlocks(in: text, length: textLength)
+        highlightInlinePatterns(in: text, length: textLength)
+
+        for layoutManager in layoutManagers {
+            layoutManager.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
+            layoutManager.invalidateDisplay(forCharacterRange: fullRange)
+        }
+
+        Self._forceDarkMode = nil
+    }
+
+    /// When non-nil, overrides `NSApp.effectiveAppearance` during
+    /// `rehighlightAll()` so the palette is chosen by the requested
+    /// theme mode rather than the (possibly still-transitioning) appearance.
+    private static var _forceDarkMode: Bool?
+
     // MARK: - Semantic highlight colors
 
+    /// Dynamic highlight colors that resolve to different values depending on
+    /// the current effective appearance (light / dark).  Accessed via computed
+    /// properties so they re-read `NSApp.effectiveAppearance` on every call.
     private enum HighlightColors {
-        static let header   = NSColor(red: 0.00, green: 0.48, blue: 1.00, alpha: 1) // #007AFF blue
-        static let quote    = NSColor(red: 0.50, green: 0.55, blue: 0.60, alpha: 1) // gray
-        static let code     = NSColor(red: 0.00, green: 0.62, blue: 0.35, alpha: 1) // #009E59 green
-        static let link     = NSColor(red: 0.65, green: 0.35, blue: 0.85, alpha: 1) // #A659D9 purple
-        static let image    = NSColor(red: 0.90, green: 0.30, blue: 0.55, alpha: 1) // #E64D8C magenta
-        static let bold     = NSColor(red: 1.00, green: 0.45, blue: 0.00, alpha: 1) // #FF7300 orange
-        static let italic   = NSColor(red: 0.50, green: 0.50, blue: 0.50, alpha: 1) // gray
-        static let strike   = NSColor(red: 0.60, green: 0.60, blue: 0.65, alpha: 1) // subdued
+        private static var isDark: Bool {
+            if let force = MarkdownTextStorage._forceDarkMode {
+                return force
+            }
+            return NSApp.effectiveAppearance.name == .darkAqua
+        }
+
+        static var header: NSColor {
+            isDark
+                ? NSColor(red: 0.40, green: 0.70, blue: 1.00, alpha: 1)
+                : NSColor(red: 0.00, green: 0.48, blue: 1.00, alpha: 1)
+        }
+        static var quote: NSColor {
+            isDark
+                ? NSColor(red: 0.65, green: 0.70, blue: 0.75, alpha: 1)
+                : NSColor(red: 0.50, green: 0.55, blue: 0.60, alpha: 1)
+        }
+        static var code: NSColor {
+            isDark
+                ? NSColor(red: 0.20, green: 0.80, blue: 0.50, alpha: 1)
+                : NSColor(red: 0.00, green: 0.62, blue: 0.35, alpha: 1)
+        }
+        static var link: NSColor {
+            isDark
+                ? NSColor(red: 0.80, green: 0.55, blue: 1.00, alpha: 1)
+                : NSColor(red: 0.65, green: 0.35, blue: 0.85, alpha: 1)
+        }
+        static var image: NSColor {
+            isDark
+                ? NSColor(red: 1.00, green: 0.50, blue: 0.70, alpha: 1)
+                : NSColor(red: 0.90, green: 0.30, blue: 0.55, alpha: 1)
+        }
+        static var bold: NSColor {
+            isDark
+                ? NSColor(red: 1.00, green: 0.60, blue: 0.20, alpha: 1)
+                : NSColor(red: 1.00, green: 0.45, blue: 0.00, alpha: 1)
+        }
+        static var italic: NSColor {
+            isDark
+                ? NSColor(red: 0.65, green: 0.65, blue: 0.65, alpha: 1)
+                : NSColor(red: 0.50, green: 0.50, blue: 0.50, alpha: 1)
+        }
+        static var strike: NSColor {
+            isDark
+                ? NSColor(red: 0.70, green: 0.70, blue: 0.75, alpha: 1)
+                : NSColor(red: 0.60, green: 0.60, blue: 0.65, alpha: 1)
+        }
     }
 
     // MARK: - Headers

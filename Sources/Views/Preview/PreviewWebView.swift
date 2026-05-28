@@ -232,6 +232,7 @@ struct PreviewWebView: NSViewRepresentable {
     let fileID: UUID?
     var viewRefs: ViewRefs?
     let previewContentWide: Bool
+    var themeMode: String = "system"
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -251,6 +252,13 @@ struct PreviewWebView: NSViewRepresentable {
         }
 
         let (webView, state) = WebViewCache.shared.webView(for: fileID, url: fileURL)
+
+        // Theme change — @AppStorage triggers updateNSView directly
+        if context.coordinator.lastThemeMode != themeMode {
+            context.coordinator.lastThemeMode = themeMode
+            let isDark = ThemeManager.isDark(for: themeMode)
+            injectTheme(webView, isDark: isDark)
+        }
 
         if context.coordinator.currentWebView !== webView {
             context.coordinator.currentWebView = webView
@@ -315,15 +323,82 @@ struct PreviewWebView: NSViewRepresentable {
 
     final class Coordinator {
         var currentWebView: WKWebView?
-        /// Tracks the last previewContentWide value to avoid unnecessary JS evaluation.
         var lastPreviewContentWide: Bool?
+        var lastThemeMode: String = "system"
+        private var themeObserver: Any?
+
+        init() {
+            themeObserver = NotificationCenter.default.addObserver(
+                forName: .themeDidChange,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let self,
+                      let webView = self.currentWebView else { return }
+                let isDark = (notification.userInfo?["isDark"] as? Bool) ?? false
+                injectTheme(webView, isDark: isDark)
+            }
+        }
+
+        deinit {
+            if let observer = themeObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+        }
     }
 }
 
 private func findScrollView(in view: NSView) -> NSScrollView? {
     if let sv = view as? NSScrollView { return sv }
     for sub in view.subviews {
-        if let found = findScrollView(in: sub) { return found }
+        if let found = findScrollView(in: sub) {
+            return found
+        }
     }
     return nil
+}
+
+// MARK: - Theme injection
+
+/// Injects a `<style>` element into the preview WebView that overrides all
+/// CSS custom properties with the values for the requested appearance.  Uses
+/// `!important` to beat the `@media (prefers-color-scheme)` selectors in the
+/// base CSS so manual theme switching works regardless of `NSApp.appearance`.
+private func injectTheme(_ webView: WKWebView, isDark: Bool) {
+    let vars: [(String, String)] = isDark ? [
+        ("--text-color",         "#f5f5f7"),
+        ("--code-bg",            "rgba(255,255,255,0.1)"),
+        ("--pre-bg",             "rgba(255,255,255,0.06)"),
+        ("--blockquote-border",  "#555"),
+        ("--blockquote-color",   "#aaa"),
+        ("--th-bg",              "#333"),
+        ("--table-border",       "#444"),
+        ("--link-color",         "#6ea8fe"),
+    ] : [
+        ("--text-color",         "#1d1d1f"),
+        ("--code-bg",            "rgba(0,0,0,0.05)"),
+        ("--pre-bg",             "rgba(0,0,0,0.04)"),
+        ("--blockquote-border",  "#ccc"),
+        ("--blockquote-color",   "#888"),
+        ("--th-bg",              "#f5f5f7"),
+        ("--table-border",       "#ddd"),
+        ("--link-color",         "#007aff"),
+    ]
+
+    let css = vars.map { "\($0.0): \($0.1) !important;" }.joined(separator: " ")
+    let escapedCSS = (try? JSONEncoder().encode(css))
+        .flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
+
+    webView.evaluateJavaScript("""
+    (function() {
+        var id = 'md-theme-override';
+        var el = document.getElementById(id);
+        if (!el) {
+            el = document.createElement('style');
+            el.id = id;
+            document.head.appendChild(el);
+        }
+        el.textContent = ':root { ' + \(escapedCSS) + ' }';
+    })();
+    """)
 }

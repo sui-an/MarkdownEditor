@@ -30,6 +30,7 @@ struct ContentView: View {
     @State private var outlinePanel: OutlinePanelWindow?
     @State private var searchPanel: SearchPanel?
     @State private var showPreviewSearch = false
+    @State private var themeChangeToken = 0
 
     /// Stored in UserDefaults so sidebar visibility survives app restarts.
     @AppStorage("sidebarVis") private var sidebarVis = 0
@@ -38,18 +39,7 @@ struct ContentView: View {
         switch themeMode {
         case "light": return .light
         case "dark": return .dark
-        default: return nil
-        }
-    }
-
-    private func applyAppearance() {
-        switch themeMode {
-        case "dark":
-            NSApp.appearance = NSAppearance(named: .darkAqua)
-        case "light":
-            NSApp.appearance = NSAppearance(named: .aqua)
-        default:
-            NSApp.appearance = nil
+        default: return UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark" ? .dark : .light
         }
     }
 
@@ -61,6 +51,7 @@ struct ContentView: View {
     }
 
     var body: some View {
+        let _ = themeChangeToken
         ZStack {
             NavigationSplitView(columnVisibility: columnVisibility) {
                 sidebarContent
@@ -78,7 +69,7 @@ struct ContentView: View {
             .environment(appState)
             .focusedSceneValue(\.currentAppState, appState)
             .onAppear {
-                applyAppearance()
+                ThemeManager.shared.applyCurrentTheme()
                 // Check for a file dropped on Dock during cold launch
                 if let appDelegate = NSApplication.shared.delegate as? AppDelegate,
                    let url = appDelegate.consumePendingFileURL() {
@@ -92,7 +83,10 @@ struct ContentView: View {
                 }
             }
             .onChange(of: themeMode) { _, _ in
-                applyAppearance()
+                ThemeManager.shared.applyCurrentTheme()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .themeDidChange)) { _ in
+                themeChangeToken &+= 1
             }
             .onReceive(NotificationCenter.default.publisher(for: .openFileURL)) { notification in
                 if let url = notification.object as? URL {
@@ -278,7 +272,7 @@ struct ContentView: View {
     }
 
     private var editorContent: some View {
-        EditorContainerView(viewRefs: viewRefs)
+        EditorContainerView(viewRefs: viewRefs, themeMode: themeMode)
     }
 
     private var previewContent: some View {
@@ -290,7 +284,8 @@ struct ContentView: View {
             fileURL: appState.currentFileURL,
             fileID: appState.selectedFileID,
             viewRefs: viewRefs,
-            previewContentWide: previewContentWide
+            previewContentWide: previewContentWide,
+            themeMode: themeMode
         )
             .frame(minWidth: 200)
     }

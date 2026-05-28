@@ -135,6 +135,7 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Services/ImageHandler.swift"
   "$PROJECT_DIR/Sources/Services/MarkdownParser.swift"
   "$PROJECT_DIR/Sources/Services/SessionRestoreService.swift"
+  "$PROJECT_DIR/Sources/Services/ThemeManager.swift"
   "$PROJECT_DIR/Sources/Views/ContentView.swift"
   "$PROJECT_DIR/Sources/Views/OutlinePanelView.swift"
   "$PROJECT_DIR/Sources/Views/ResizableHSplitView.swift"

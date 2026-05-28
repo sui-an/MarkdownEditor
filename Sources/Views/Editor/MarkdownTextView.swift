@@ -236,6 +236,7 @@ struct MarkdownTextView: NSViewRepresentable {
     @Binding var text: String
     var currentFileURL: URL?
     var viewRefs: ViewRefs?
+    var themeMode: String = "system"
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -319,6 +320,27 @@ struct MarkdownTextView: NSViewRepresentable {
     func updateNSView(_ wrapper: EditorWrapperView, context: Context) {
         let textView = wrapper.textView
         let scrollView = wrapper.scrollView
+        let coordinator = context.coordinator
+
+        if coordinator.lastThemeMode != themeMode {
+            coordinator.lastThemeMode = themeMode
+            let isDark = ThemeManager.isDark(for: themeMode)
+            scrollView.backgroundColor = isDark
+                ? NSColor(calibratedRed: 0.12, green: 0.12, blue: 0.14, alpha: 1.0)
+                : NSColor(calibratedWhite: 0.98, alpha: 1.0)
+            textView.textColor = isDark
+                ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
+                : NSColor(calibratedWhite: 0.08, alpha: 1.0)
+            textView.insertionPointColor = isDark
+                ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
+                : NSColor(calibratedWhite: 0.08, alpha: 1.0)
+            wrapper.lineNumberView.needsDisplay = true
+            scrollView.needsDisplay = true
+            textView.needsDisplay = true
+            if let storage = textView.textStorage as? MarkdownTextStorage {
+                storage.rehighlightAll(isDark: isDark)
+            }
+        }
 
         if let storage = textView.textStorage {
             let cleanCurrent = context.coordinator.buildCleanMarkdown(from: storage)
@@ -358,6 +380,9 @@ struct MarkdownTextView: NSViewRepresentable {
         var suppressTextDidChange = false
         /// Tracks the last opened file URL so we can detect document switches.
         var lastFileURL: URL?
+        /// Tracks the last known theme mode so we can detect appearance changes.
+        var lastThemeMode: String = "system"
+        private var themeObserver: Any?
         /// Cache of decoded NSImages keyed by URL string. Avoids re-decoding
         /// base64 images on every processInlineImages call (the biggest bottleneck
         /// for files with embedded base64 images).
@@ -377,6 +402,39 @@ struct MarkdownTextView: NSViewRepresentable {
 
         init(_ parent: MarkdownTextView) {
             self.parent = parent
+            super.init()
+            themeObserver = NotificationCenter.default.addObserver(
+                forName: .themeDidChange,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let self,
+                      let textView = self.textView,
+                      let wrapper = textView.superview?.superview?.superview as? EditorWrapperView else { return }
+                let scrollView = wrapper.scrollView
+                let isDark = (notification.userInfo?["isDark"] as? Bool) ?? false
+                scrollView.backgroundColor = isDark
+                    ? NSColor(calibratedRed: 0.12, green: 0.12, blue: 0.14, alpha: 1.0)
+                    : NSColor(calibratedWhite: 0.98, alpha: 1.0)
+                textView.textColor = isDark
+                    ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
+                    : NSColor(calibratedWhite: 0.08, alpha: 1.0)
+                textView.insertionPointColor = isDark
+                    ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
+                    : NSColor(calibratedWhite: 0.08, alpha: 1.0)
+                wrapper.lineNumberView.needsDisplay = true
+                scrollView.needsDisplay = true
+                textView.needsDisplay = true
+                if let storage = textView.textStorage as? MarkdownTextStorage {
+                    storage.rehighlightAll(isDark: isDark)
+                }
+            }
+        }
+
+        deinit {
+            if let observer = themeObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
         }
 
 
