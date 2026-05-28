@@ -42,6 +42,17 @@ struct ContentView: View {
         }
     }
 
+    private func applyAppearance() {
+        switch themeMode {
+        case "dark":
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        case "light":
+            NSApp.appearance = NSAppearance(named: .aqua)
+        default:
+            NSApp.appearance = nil
+        }
+    }
+
     private var columnVisibility: Binding<NavigationSplitViewVisibility> {
         Binding(
             get: { intToVis(sidebarVis) },
@@ -67,6 +78,7 @@ struct ContentView: View {
             .environment(appState)
             .focusedSceneValue(\.currentAppState, appState)
             .onAppear {
+                applyAppearance()
                 // Check for a file dropped on Dock during cold launch
                 if let appDelegate = NSApplication.shared.delegate as? AppDelegate,
                    let url = appDelegate.consumePendingFileURL() {
@@ -78,6 +90,9 @@ struct ContentView: View {
                 if let url = SessionRestoreService.restoreLastOpened() {
                     appState.openFile(url: url)
                 }
+            }
+            .onChange(of: themeMode) { _, _ in
+                applyAppearance()
             }
             .onReceive(NotificationCenter.default.publisher(for: .openFileURL)) { notification in
                 if let url = notification.object as? URL {
