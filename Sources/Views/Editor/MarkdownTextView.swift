@@ -342,15 +342,18 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
 
+        // Fast path: raw strings match — no text change, skip expensive buildCleanMarkdown
+        if textView.string == text {
+            context.coordinator.scheduleImageProcessing()
+            return
+        }
+
         if let storage = textView.textStorage {
             let cleanCurrent = context.coordinator.buildCleanMarkdown(from: storage)
             if cleanCurrent == text {
                 context.coordinator.scheduleImageProcessing()
                 return
             }
-        } else if textView.string == text {
-            context.coordinator.scheduleImageProcessing()
-            return
         }
 
         context.coordinator.suppressTextDidChange = true

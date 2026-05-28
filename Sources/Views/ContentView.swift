@@ -66,7 +66,7 @@ struct ContentView: View {
             }
             .navigationSplitViewStyle(.prominentDetail)
             .navigationTitle(windowTitle)
-            .animation(.none, value: sidebarVis)
+            .animation(.easeInOut(duration: 0.22), value: sidebarVis)
             .environment(appState)
             .focusedSceneValue(\.currentAppState, appState)
             .onAppear {
@@ -128,21 +128,6 @@ struct ContentView: View {
                 }
             }
             .toolbar(id: "main") {
-                ToolbarItem(id: "sidebarToggle", placement: .navigation) {
-                    Button {
-                        var t = Transaction()
-                        t.disablesAnimations = true
-                        withTransaction(t) {
-                            sidebarVis = sidebarVis == 3 ? 1 : 3
-                        }
-                    } label: {
-                        Image(systemName: sidebarVis == 3 ? "sidebar.left" : "sidebar.right")
-                            .foregroundStyle(.secondary)
-                    }
-                    .help("Toggle Sidebar (⌘⌥S)")
-                    .padding(.leading, 4)
-                }
-
                 ToolbarItem(id: "newNote", placement: .navigation) {
                     Button {
                         appState.createNewNote()
@@ -195,9 +180,9 @@ struct ContentView: View {
 
             // Hidden keyboard shortcut handlers
             Button("") {
-                var t = Transaction()
-                t.disablesAnimations = true
-                withTransaction(t) { sidebarVis = sidebarVis == 3 ? 1 : 3 }
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    sidebarVis = sidebarVis == 3 ? 1 : 3
+                }
             }
                 .keyboardShortcut("s", modifiers: [.command, .option])
                 .frame(width: 0, height: 0)
