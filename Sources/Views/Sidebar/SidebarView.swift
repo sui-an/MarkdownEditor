@@ -36,6 +36,9 @@ struct SidebarView: View {
                                 isSelected: appState.selectedFileID == item.id
                             )
                             .contextMenu {
+                                Button("Reveal in Finder") {
+                                    NSWorkspace.shared.activateFileViewerSelecting([item.url])
+                                }
                                 Button("Close") {
                                     appState.closeFile(id: item.id)
                                 }
