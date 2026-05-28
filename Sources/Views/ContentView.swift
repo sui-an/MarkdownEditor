@@ -133,17 +133,6 @@ struct ContentView: View {
                 }
             }
             .toolbar(id: "main") {
-                ToolbarItem(id: "sidebarToggle", placement: .navigation) {
-                    Button {
-                        sidebarVis = sidebarVis == 3 ? 1 : 3
-                    } label: {
-                        Image(systemName: "sidebar.left")
-                            .foregroundStyle(.secondary)
-                    }
-                    .help("Toggle Sidebar (⌘⌥S)")
-                    .padding(.leading, 4)
-                }
-
                 ToolbarItem(id: "newNote", placement: .automatic) {
                     Button {
                         appState.createNewNote()

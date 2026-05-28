@@ -3,9 +3,25 @@ import AppKit
 
 struct SidebarView: View {
     @Environment(AppState.self) private var appState
+    @AppStorage("sidebarVis") private var sidebarVis = 0
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack {
+                Button {
+                    sidebarVis = sidebarVis == 3 ? 1 : 3
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Toggle Sidebar (⌘⌥S)")
+
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+
             VStack(spacing: 2) {
                 SidebarActionButton(
                     icon: "doc.badge.plus",
