@@ -20,19 +20,19 @@ final class OutlinePanelWindow: NSWindow {
             webView: webView
         )
         let hosting = NSHostingView(rootView: content)
-        hosting.frame.size = hosting.fittingSize
         self.hostingView = hosting
 
-        let width: CGFloat = 250
-        let height: CGFloat = 400
-        let screenFrame = NSScreen.main?.frame ?? .zero
+        let panelWidth: CGFloat = 280
+        let panelHeight: CGFloat = 650
+        let appWindow = NSApp.mainWindow ?? NSApp.keyWindow
+        let windowFrame = appWindow?.frame ?? .zero
         let origin = NSPoint(
-            x: screenFrame.width - width - 20,
-            y: screenFrame.height - height - 80
+            x: windowFrame.maxX - panelWidth - 16,
+            y: windowFrame.maxY - panelHeight - 60
         )
 
         super.init(
-            contentRect: NSRect(origin: origin, size: NSSize(width: width, height: height)),
+            contentRect: NSRect(origin: origin, size: NSSize(width: panelWidth, height: panelHeight)),
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -42,8 +42,12 @@ final class OutlinePanelWindow: NSWindow {
         titleVisibility = .hidden
         isMovableByWindowBackground = true
         contentView = hosting
-        level = .floating
+        level = .normal
         collectionBehavior = [.transient, .ignoresCycle]
+        // Stay above the app's main window, not other apps
+        if let appWindow {
+            appWindow.addChildWindow(self, ordered: .above)
+        }
         // Keep the window alive after close so re-show via makeKeyAndOrderFront works.
         isReleasedWhenClosed = false
         makeKeyAndOrderFront(nil)
@@ -55,7 +59,6 @@ final class OutlinePanelWindow: NSWindow {
             textView: textViewProvider,
             webView: webViewProvider
         )
-        hostingView.frame.size = hostingView.fittingSize
     }
 
     /// When the user clicks the close button, just hide the window instead of

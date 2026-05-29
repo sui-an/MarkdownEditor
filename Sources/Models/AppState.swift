@@ -256,6 +256,7 @@ final class AppState {
                 currentFileContent = cachedContent
                 renderedHTML = cached.html
                 renderedBodyHTML = cached.bodyHTML
+                updateContent(cachedContent)
                 return
             }
             // Try secondary LRU cache (survives NSCache memory-pressure purges)
@@ -267,9 +268,12 @@ final class AppState {
                 currentFileContent = cachedContent
                 renderedHTML = cached.html
                 renderedBodyHTML = cached.bodyHTML
+                updateContent(cachedContent)
                 return
             }
             // HTML cache miss — content ready, generate on background
+            currentFileContent = cachedContent
+            updateContent(cachedContent)
             startAsyncHTMLGeneration(content: cachedContent, url: url, token: token, cacheKey: cacheKey)
             return
         }
@@ -296,6 +300,7 @@ final class AppState {
                     self.isFileDirty = false
                     self.isLoadingFile = false
                     self.currentFileContent = content
+                    self.updateContent(content)
                 }
 
                 // Check cache again (may have been cached by another window since outer check)
@@ -395,11 +400,13 @@ final class AppState {
     // MARK: - Outline
 
     private func refreshOutline(_ content: String) {
+        let token = generation
         pendingOutlineWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             let headings = HeadingParser.parse(content)
             DispatchQueue.main.async {
-                self?.outlineHeadings = headings
+                guard let self, token == self.generation else { return }
+                self.outlineHeadings = headings
             }
         }
         pendingOutlineWork = work
