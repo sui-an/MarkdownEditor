@@ -18,6 +18,10 @@ private final class CachedHTML {
 
 @Observable
 final class AppState {
+    /// Shared instance used by the AppDelegate when files are opened via Finder.
+    /// ContentView references this same instance via `@State`.
+    static let shared = AppState()
+
     var rootFolders: [FileTreeItem] = []
     var openFiles: [FileTreeItem] = []
     var selectedFileID: UUID?
@@ -172,11 +176,6 @@ final class AppState {
         if selectedFileID == id {
             clearSelection()
         }
-        // If no files left, clear the session bookmark so next launch starts
-        // with empty state instead of restoring a file the user closed.
-        if openFiles.isEmpty {
-            SessionRestoreService.clearLastOpened()
-        }
         WebViewCache.shared.remove(for: id)
     }
 
@@ -237,9 +236,8 @@ final class AppState {
         selectedFileID = id
         selectedFileURL = url
         currentFileURL = url
-
-        // Persist last opened document for session restore
-        SessionRestoreService.saveLastOpened(url)
+        renderedHTML = ""
+        renderedBodyHTML = ""
 
         // Try cache FIRST — in-memory content cache (zero disk IO) then HTML cache.
         let cacheKey = quickHashForCacheCheck(url: url)

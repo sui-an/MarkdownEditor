@@ -21,9 +21,8 @@ private func intToVis(_ i: Int) -> NavigationSplitViewVisibility {
 }
 
 struct ContentView: View {
-    @State private var appState = AppState()
+    @State private var appState = AppState.shared
     @State private var viewRefs = ViewRefs()
-    @State private var didRestore = false
     @AppStorage("previewOnly") private var previewOnly = false
     @AppStorage("previewContentWide") private var previewContentWide = false
     @AppStorage("themeMode") private var themeMode: String = "system"
@@ -71,28 +70,12 @@ struct ContentView: View {
             .focusedSceneValue(\.currentAppState, appState)
             .onAppear {
                 ThemeManager.shared.applyCurrentTheme()
-                // Check for a file dropped on Dock during cold launch
-                if let appDelegate = NSApplication.shared.delegate as? AppDelegate,
-                   let url = appDelegate.consumePendingFileURL() {
-                    appState.openFile(url: url)
-                }
-                // Session restore — only on first appear, skip if Dock drop handled above
-                guard !didRestore else { return }
-                didRestore = true
-                if let url = SessionRestoreService.restoreLastOpened() {
-                    appState.openFile(url: url)
-                }
             }
             .onChange(of: themeMode) { _, _ in
                 ThemeManager.shared.applyCurrentTheme()
             }
             .onReceive(NotificationCenter.default.publisher(for: .themeDidChange)) { _ in
                 themeChangeToken &+= 1
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .openFileURL)) { notification in
-                if let url = notification.object as? URL {
-                    appState.openFile(url: url)
-                }
             }
             .onDrop(of: [.fileURL], isTargeted: nil) { providers in
                 for provider in providers {

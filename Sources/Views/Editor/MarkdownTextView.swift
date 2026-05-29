@@ -337,15 +337,16 @@ struct MarkdownTextView: NSViewRepresentable {
         let scrollView = wrapper.scrollView
         let coordinator = context.coordinator
 
+        let isDark = ThemeManager.isDark(for: themeMode)
+        textView.textColor = isDark
+            ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.08, alpha: 1.0)
+
         if coordinator.lastThemeMode != themeMode {
             coordinator.lastThemeMode = themeMode
-            let isDark = ThemeManager.isDark(for: themeMode)
             scrollView.backgroundColor = isDark
                 ? NSColor(calibratedRed: 0.12, green: 0.12, blue: 0.14, alpha: 1.0)
                 : NSColor(calibratedWhite: 0.98, alpha: 1.0)
-            textView.textColor = isDark
-                ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
-                : NSColor(calibratedWhite: 0.08, alpha: 1.0)
             textView.insertionPointColor = isDark
                 ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
                 : NSColor(calibratedWhite: 0.08, alpha: 1.0)
@@ -374,6 +375,12 @@ struct MarkdownTextView: NSViewRepresentable {
         context.coordinator.suppressTextDidChange = true
         let selectedRange = textView.selectedRange()
         textView.string = text
+        // Explicitly set base foreground color so text displays correctly
+        // immediately, without waiting for the 0.1s applyHighlighting delay.
+        if let storage = textView.textStorage, storage.length > 0 {
+            storage.addAttribute(.foregroundColor, value: NSColor.textColor,
+                                 range: NSRange(location: 0, length: storage.length))
+        }
         let safeLocation = min(selectedRange.location, (text as NSString).length)
         textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
         context.coordinator.suppressTextDidChange = false
