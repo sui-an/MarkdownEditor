@@ -102,6 +102,27 @@ final class WebViewState: NSObject, WKNavigationDelegate {
 final class WebViewCache {
     static let shared = WebViewCache()
 
+    // Pre-cached JS scripts — read from disk once, avoids blocking the main
+    // thread on every first-time WKWebView creation (mermaid.min.js is 3.2MB).
+    private static let cachedHighlightJS: String? = {
+        guard let path = Bundle.main.path(forResource: "highlight.min", ofType: "js"),
+              let content = try? String(contentsOfFile: path) else { return nil }
+        return content
+    }()
+
+    private static let cachedMermaidJS: String? = {
+        guard let path = Bundle.main.path(forResource: "mermaid.min", ofType: "js"),
+              let content = try? String(contentsOfFile: path) else { return nil }
+        return content
+    }()
+
+    /// Warm up the JS cache on a background queue during app launch.
+    /// Does nothing if the cache has already been populated.
+    static func preloadScripts() {
+        _ = cachedHighlightJS
+        _ = cachedMermaidJS
+    }
+
     private var cache: [UUID: WKWebView] = [:]
     private var states: [ObjectIdentifier: WebViewState] = [:]
     private var urlToFileID: [URL: UUID] = [:]
@@ -166,15 +187,13 @@ final class WebViewCache {
         let config = WKWebViewConfiguration()
 
         // highlight.js — injected once, persists across incremental DOM updates
-        if let hljsPath = Bundle.main.path(forResource: "highlight.min", ofType: "js"),
-           let hljsJS = try? String(contentsOfFile: hljsPath) {
+        if let hljsJS = Self.cachedHighlightJS {
             let script = WKUserScript(source: hljsJS, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
             config.userContentController.addUserScript(script)
         }
 
         // mermaid.min.js — injected once, persists across incremental DOM updates.
-        if let mmdPath = Bundle.main.path(forResource: "mermaid.min", ofType: "js"),
-           let mmdJS = try? String(contentsOfFile: mmdPath) {
+        if let mmdJS = Self.cachedMermaidJS {
             let script = WKUserScript(source: mmdJS, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
             config.userContentController.addUserScript(script)
         }

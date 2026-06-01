@@ -1,66 +1,37 @@
 import Foundation
 
-// MARK: - Session Restore (last opened document)
+// MARK: - Session Restore (opened documents)
 
 enum SessionRestoreService {
 
-    private static let bookmarkKey = "lastOpenedFileBookmark"
+    private static let userDefaultsKey = "openedFilesPaths"
 
-    /// Save a security-scoped bookmark for the given URL to UserDefaults.
-    static func saveLastOpened(_ url: URL) {
-        // For non-sandboxed apps, store URL bookmark so the file can be
-        // resolved even if it moves. Security-scoped bookmark is not needed
-        // when the app has full file system access.
-        do {
-            let bookmark = try url.bookmarkData(
-                options: [],
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-            )
-            UserDefaults.standard.set(bookmark, forKey: bookmarkKey)
-        } catch {
-            // Non-fatal: just won't restore on next launch
-            print("Failed to create bookmark for \(url): \(error)")
+    /// Save the given URLs (all currently open files) to UserDefaults.
+    static func saveOpenedFiles(_ urls: [URL]) {
+        let paths = urls.map { $0.path }
+        if let data = try? JSONEncoder().encode(paths) {
+            UserDefaults.standard.set(data, forKey: userDefaultsKey)
+            UserDefaults.standard.synchronize()
         }
     }
 
-    /// Clear the saved bookmark (e.g. when closing the last file).
-    static func clearLastOpened() {
-        UserDefaults.standard.removeObject(forKey: bookmarkKey)
+    /// Clear all saved file paths.
+    static func clearOpenedFiles() {
+        UserDefaults.standard.removeObject(forKey: userDefaultsKey)
+        UserDefaults.standard.synchronize()
     }
 
-    /// Resolve the bookmark saved from a previous session.
-    /// Returns `nil` if the bookmark is invalid or the file no longer exists.
-    static func restoreLastOpened() -> URL? {
-        guard let bookmark = UserDefaults.standard.data(forKey: bookmarkKey) else { return nil }
-
-        var isStale = false
-        do {
-            let url = try URL(
-                resolvingBookmarkData: bookmark,
-                options: [],
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            )
-
-            // Re-save if stale (file may have been moved)
-            if isStale {
-                do {
-                    let newBookmark = try url.bookmarkData(
-                        options: [],
-                        includingResourceValuesForKeys: nil,
-                        relativeTo: nil
-                    )
-                    UserDefaults.standard.set(newBookmark, forKey: bookmarkKey)
-                } catch {
-                    // Ignore re-save failure
-                }
-            }
-
+    /// Read previously saved file paths and return URLs for files that still
+    /// exist on disk.
+    static func restoreOpenedFiles() -> [URL] {
+        guard let data = UserDefaults.standard.data(forKey: userDefaultsKey),
+              let paths = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        return paths.compactMap { path in
+            let url = URL(fileURLWithPath: path)
             guard FileManager.default.fileExists(atPath: url.path) else { return nil }
             return url
-        } catch {
-            return nil
         }
     }
 }

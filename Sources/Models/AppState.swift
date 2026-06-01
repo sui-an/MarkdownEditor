@@ -135,6 +135,7 @@ final class AppState {
 
         let item = FileTreeItem(url: url, name: url.lastPathComponent, isDirectory: false, parentID: nil)
         openFiles.append(item)
+        SessionRestoreService.saveOpenedFiles(openFiles.map { $0.url })
         loadFileContent(url: url, id: item.id)
     }
 
@@ -173,6 +174,7 @@ final class AppState {
             cachedHTMLAccessOrder.removeAll { $0 == item.url }
         }
         openFiles.removeAll { $0.id == id }
+        SessionRestoreService.saveOpenedFiles(openFiles.map { $0.url })
         if selectedFileID == id {
             clearSelection()
         }
@@ -254,7 +256,6 @@ final class AppState {
                 currentFileContent = cachedContent
                 renderedHTML = cached.html
                 renderedBodyHTML = cached.bodyHTML
-                updateContent(cachedContent)
                 return
             }
             // Try secondary LRU cache (survives NSCache memory-pressure purges)
@@ -266,25 +267,24 @@ final class AppState {
                 currentFileContent = cachedContent
                 renderedHTML = cached.html
                 renderedBodyHTML = cached.bodyHTML
-                updateContent(cachedContent)
                 return
             }
             // HTML cache miss — content ready, generate on background
             currentFileContent = cachedContent
-            updateContent(cachedContent)
             startAsyncHTMLGeneration(content: cachedContent, url: url, token: token, cacheKey: cacheKey)
             return
         }
 
-        // In-memory cache miss — read file on background, editor gets content first.
+        // Cache miss — read file on background, show content as soon as
+        // the file is read, then generate HTML for the preview asynchronously.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self, token == self.generation else { return }
 
             do {
                 let content = try FileService.readFile(at: url)
 
-                // Always cache content — if the user switched away during the read,
-                // the cache ensures the next switch to this file is zero-IO.
+                // Cache content regardless of navigation — even if the user
+                // switches away during the read, the next switch is zero-IO.
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.cacheFileContent(content, for: url, cacheKey: cacheKey)
@@ -292,32 +292,24 @@ final class AppState {
 
                 guard token == self.generation else { return }
 
+                // Show content in the editor immediately — user can start
+                // reading/editing while HTML preview is generated.
                 DispatchQueue.main.async { [weak self] in
                     guard let self, token == self.generation else { return }
                     self.lastSavedContent = content
                     self.isFileDirty = false
                     self.isLoadingFile = false
                     self.currentFileContent = content
-                    self.updateContent(content)
                 }
 
-                // Check cache again (may have been cached by another window since outer check)
-                if let cached = self.htmlCache.object(forKey: url as NSURL),
-                   self.cachedContentHash[url] == cacheKey {
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self, token == self.generation else { return }
-                        self.renderedHTML = cached.html
-                    }
-                    return
-                }
-
-                // Generate HTML on background
+                // Generate HTML on background — preview catches up when done.
                 self.generateAndCacheHTML(content: content, url: url, token: token, cacheKey: cacheKey)
             } catch {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, token == self.generation else { return }
                     self.isLoadingFile = false
                     self.openFiles.removeAll { $0.id == id }
+                    SessionRestoreService.saveOpenedFiles(self.openFiles.map { $0.url })
                     let alert = NSAlert()
                     alert.messageText = "Cannot Open File"
                     alert.informativeText = error.localizedDescription
@@ -578,6 +570,7 @@ final class AppState {
     /// recursive deallocation crashes during view hierarchy teardown.
     /// Call when the owning view disappears or is about to be deallocated.
     func cleanup() {
+        SessionRestoreService.saveOpenedFiles(openFiles.map { $0.url })
         pendingHTMLWork?.cancel()
         pendingHTMLWork = nil
         pendingOutlineWork?.cancel()
@@ -593,6 +586,14 @@ final class AppState {
         cachedHTML.removeAll()
         cachedHTMLAccessOrder.removeAll()
         htmlCache.removeAllObjects()
+        selectedFileID = nil
+        selectedFileURL = nil
+        currentFileURL = nil
+        currentFileContent = ""
+        lastSavedContent = ""
+        isFileDirty = false
+        renderedHTML = ""
+        renderedBodyHTML = ""
     }
 
     func promptExternalChange(for url: URL) {

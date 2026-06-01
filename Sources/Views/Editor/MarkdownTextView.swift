@@ -143,6 +143,11 @@ final class EditorScrollView: NSScrollView {
     override func setFrameSize(_ newSize: NSSize) {
         let oldWidth = frame.width
 
+        guard newSize.width > 0 else {
+            super.setFrameSize(newSize)
+            return
+        }
+
         // When collapsing to near-zero width, detach width tracking so the text
         // container keeps its previous width — text never reflows to 0, which
         // prevents NSTextView from resetting the horizontal scroll position.
@@ -225,9 +230,11 @@ final class EditorWrapperView: NSView {
     override func layout() {
         super.layout()
         let lineNumberWidth: CGFloat = 30
+        let scrollWidth = max(0, bounds.width - lineNumberWidth)
         lineNumberView.frame = NSRect(x: 0, y: 0, width: lineNumberWidth, height: bounds.height)
         scrollView.frame = NSRect(x: lineNumberWidth, y: 0,
-                                  width: bounds.width - lineNumberWidth, height: bounds.height)
+                                  width: scrollWidth, height: bounds.height)
+        guard scrollWidth > 0 else { return }
 
         let now = CACurrentMediaTime()
         let interval = now - lastLayoutTime
@@ -375,12 +382,9 @@ struct MarkdownTextView: NSViewRepresentable {
         context.coordinator.suppressTextDidChange = true
         let selectedRange = textView.selectedRange()
         textView.string = text
-        // Explicitly set base foreground color so text displays correctly
-        // immediately, without waiting for the 0.1s applyHighlighting delay.
-        if let storage = textView.textStorage, storage.length > 0 {
-            storage.addAttribute(.foregroundColor, value: NSColor.textColor,
-                                 range: NSRange(location: 0, length: storage.length))
-        }
+        // textView.textColor is set above and serves as the default foreground
+        // for un-attributed text — no need to addAttribute over the full range.
+        // Syntax highlighting (0.1s delayed) will set per-element colors.
         let safeLocation = min(selectedRange.location, (text as NSString).length)
         textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
         context.coordinator.suppressTextDidChange = false
@@ -389,10 +393,13 @@ struct MarkdownTextView: NSViewRepresentable {
             textView.window?.makeFirstResponder(textView)
         }
         // Scroll to top-left when switching documents.
-        if context.coordinator.lastFileURL != currentFileURL, !text.isEmpty {
-            textView.layoutManager?.ensureLayout(for: textView.textContainer!)
-            scrollView.contentView.scroll(to: .zero)
-            scrollView.reflectScrolledClipView(scrollView.contentView)
+        if context.coordinator.lastFileURL != currentFileURL {
+            textView.undoManager?.removeAllActions()
+            if !text.isEmpty {
+                textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+                scrollView.contentView.scroll(to: .zero)
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
         }
         context.coordinator.lastFileURL = currentFileURL
     }

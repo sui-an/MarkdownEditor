@@ -23,7 +23,7 @@ private func intToVis(_ i: Int) -> NavigationSplitViewVisibility {
 struct ContentView: View {
     @State private var appState = AppState.shared
     @State private var viewRefs = ViewRefs()
-    @AppStorage("previewOnly") private var previewOnly = false
+    @AppStorage("previewOnly") private var previewOnly = true
     @AppStorage("previewContentWide") private var previewContentWide = false
     @AppStorage("themeMode") private var themeMode: String = "system"
     @State private var outlinePanel: OutlinePanelWindow?

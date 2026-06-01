@@ -25,11 +25,10 @@ struct ResizableHSplitView<Left: View, Right: View>: View {
             let rightW = collapsed ? w : (w - leftW - dividerW)
 
             HStack(spacing: 0) {
-                if !collapsed {
-                    left
-                        .frame(width: leftW)
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                }
+                left
+                    .frame(width: leftW)
+                    .clipped()
+                    .opacity(collapsed ? 0 : 1)
 
                 if !collapsed {
                     // Divider sits directly in HStack layout flow — no offset/position

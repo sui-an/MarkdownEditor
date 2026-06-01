@@ -30,6 +30,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Pre-cache JS resources on background queue so first WKWebView
+        // creation doesn't read 3.2MB mermaid.min.js on the main thread.
+        DispatchQueue.global(qos: .utility).async {
+            WebViewCache.preloadScripts()
+        }
+
+        let urls = SessionRestoreService.restoreOpenedFiles()
+        if !urls.isEmpty {
+            DispatchQueue.main.async {
+                for url in urls {
+                    AppState.shared.openFile(url: url)
+                }
+            }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Dock → Quit: the app truly terminates, so clear all saved files.
+        // The user wants a fresh start next time.
+        SessionRestoreService.clearOpenedFiles()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            let urls = SessionRestoreService.restoreOpenedFiles()
+            for url in urls {
+                AppState.shared.openFile(url: url)
+            }
+        }
+        return true
+    }
 }
 
 // MARK: - App Entry
@@ -148,7 +181,7 @@ struct SaveCommand: View {
 }
 
 struct TogglePreviewCommand: View {
-    @AppStorage("previewOnly") private var previewOnly = false
+    @AppStorage("previewOnly") private var previewOnly = true
 
     var body: some View {
         Button("Preview Only") {
