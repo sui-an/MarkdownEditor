@@ -81,9 +81,7 @@ final class AppState {
     /// Secondary HTML cache — deterministic LRU, NOT affected by memory pressure
     /// (unlike NSCache which may purge entries at any time). Ensures recently
     /// rendered HTML is available instantly on file switch, even after a cache purge.
-    private var cachedHTML: [URL: CachedHTML] = [:]
-    private var cachedHTMLAccessOrder: [URL] = []
-    private let cachedHTMLCacheLimit = 10
+    private var cachedHTML = LRUCache<URL, CachedHTML>(limit: 10)
 
     init() {
         htmlCache.countLimit = 20
@@ -175,8 +173,7 @@ final class AppState {
             cachedContentHash.removeValue(forKey: item.url)
             fileContents.removeValue(forKey: item.url)
             fileSavedHashes.removeValue(forKey: item.url)
-            cachedHTML.removeValue(forKey: item.url)
-            cachedHTMLAccessOrder.removeAll { $0 == item.url }
+            cachedHTML.removeValue(for: item.url)
         }
         openFiles.removeAll { $0.id == id }
         SessionRestoreService.saveOpenedFiles(openFiles.map { $0.url })
@@ -203,8 +200,7 @@ final class AppState {
         for file in folder.allMarkdownFiles {
             htmlCache.removeObject(forKey: file.url as NSURL)
             cachedContentHash.removeValue(forKey: file.url)
-            cachedHTML.removeValue(forKey: file.url)
-            cachedHTMLAccessOrder.removeAll { $0 == file.url }
+            cachedHTML.removeValue(for: file.url)
         }
 
         folderWatchers[id]?.stop()
@@ -236,7 +232,8 @@ final class AppState {
         pendingOutlineWork = nil
 
         // Advance generation so stale async blocks discard results
-        let token = OSAtomicIncrement64(&generation)
+        generation &+= 1
+        let token = generation
 
         // Signal loading state immediately — editor switches to new file at once
         isLoadingFile = true
@@ -264,8 +261,7 @@ final class AppState {
                 return
             }
             // Try secondary LRU cache (survives NSCache memory-pressure purges)
-            if let cached = cachedHTML[url],
-               cachedContentHash[url] == cacheKey {
+            if let cached = cachedHTML[url] {
                 lastSavedContent = cachedContent
                 isFileDirty = false
                 isLoadingFile = false
@@ -398,7 +394,8 @@ final class AppState {
     // MARK: - Outline
 
     private func refreshOutline(_ content: String) {
-        let token = OSAtomicIncrement64(&outlineGeneration)
+        outlineGeneration &+= 1
+        let token = outlineGeneration
         pendingOutlineWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             let headings = HeadingParser.parse(content)
@@ -485,23 +482,13 @@ final class AppState {
             fileSavedHashes.removeValue(forKey: evicted)
             cachedContentHash.removeValue(forKey: evicted)
             htmlCache.removeObject(forKey: evicted as NSURL)
-            cachedHTML.removeValue(forKey: evicted)
-            cachedHTMLAccessOrder.removeAll { $0 == evicted }
+            cachedHTML.removeValue(for: evicted)
         }
     }
 
     /// Stores rendered HTML in the secondary LRU cache (survives NSCache purges).
     private func cacheRenderedHTML(_ cached: CachedHTML, for url: URL) {
-        cachedHTML[url] = cached
-        if let idx = cachedHTMLAccessOrder.firstIndex(of: url) {
-            cachedHTMLAccessOrder.remove(at: idx)
-        }
-        cachedHTMLAccessOrder.append(url)
-        if cachedHTML.count > cachedHTMLCacheLimit,
-           let evicted = cachedHTMLAccessOrder.first {
-            cachedHTMLAccessOrder.removeFirst()
-            cachedHTML.removeValue(forKey: evicted)
-        }
+        cachedHTML.set(cached, for: url)
     }
 
     // MARK: - File System Changes
@@ -541,8 +528,7 @@ final class AppState {
         fileContents.removeValue(forKey: url)
         fileSavedHashes.removeValue(forKey: url)
         fileContentAccessOrder.removeAll { $0 == url }
-        cachedHTML.removeValue(forKey: url)
-        cachedHTMLAccessOrder.removeAll { $0 == url }
+        cachedHTML.removeValue(for: url)
         WebViewCache.shared.removeWebView(for: url)
     }
 
@@ -607,7 +593,6 @@ final class AppState {
         fileSavedHashes.removeAll()
         cachedContentHash.removeAll()
         cachedHTML.removeAll()
-        cachedHTMLAccessOrder.removeAll()
         htmlCache.removeAllObjects()
         selectedFileID = nil
         selectedFileURL = nil

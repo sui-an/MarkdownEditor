@@ -24,7 +24,7 @@ struct ContentView: View {
     @State private var appState = AppState.shared
     @State private var viewRefs = ViewRefs()
     @AppStorage("previewOnly") private var previewOnly = true
-    @AppStorage("previewContentWide") private var previewContentWide = false
+    @AppStorage("previewContentWidth") private var previewContentWidth = 0
     @AppStorage("themeMode") private var themeMode: String = "system"
     @State private var outlinePanel: OutlinePanelWindow?
     @State private var searchPanel: SearchPanel?
@@ -38,7 +38,23 @@ struct ContentView: View {
         switch themeMode {
         case "light": return .light
         case "dark": return .dark
-        default: return nil
+        default: return NSApp.effectiveAppearance.name == .darkAqua ? .dark : .light
+        }
+    }
+
+    private var widthIcon: String {
+        switch previewContentWidth {
+        case 1: return "rectangle"
+        case 2: return "rectangle.3.group"
+        default: return "rectangle.dashed"
+        }
+    }
+
+    private var widthHelp: String {
+        switch previewContentWidth {
+        case 1: return "Full Width (⌘W)"
+        case 2: return "Normal Width (⌘W)"
+        default: return "Wide Width (⌘W)"
         }
     }
 
@@ -125,13 +141,11 @@ struct ContentView: View {
                 if previewOnly {
                     ToolbarItem(id: "contentWidthToggle", placement: .primaryAction) {
                         Button {
-                            previewContentWide.toggle()
+                            previewContentWidth = (previewContentWidth + 1) % 3
                         } label: {
-                            Image(systemName: previewContentWide
-                                  ? "rectangle.3.group"
-                                  : "rectangle.dashed")
+                            Image(systemName: widthIcon)
                         }
-                        .help(previewContentWide ? "Normal Width (⌘W)" : "Widest Width (⌘W)")
+                        .help(widthHelp)
                     }
                 }
 
@@ -245,7 +259,7 @@ struct ContentView: View {
     }
 
     private func toggleContentWidth() {
-        previewContentWide.toggle()
+        previewContentWidth = (previewContentWidth + 1) % 3
     }
 
     private var sidebarContent: some View {
@@ -266,7 +280,7 @@ struct ContentView: View {
             fileURL: appState.currentFileURL,
             fileID: appState.selectedFileID,
             viewRefs: viewRefs,
-            previewContentWide: previewContentWide,
+            previewContentWidth: previewContentWidth,
             themeMode: themeMode
         )
             .frame(minWidth: 200)

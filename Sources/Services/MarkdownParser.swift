@@ -88,19 +88,6 @@ enum MarkdownParser {
         return (finalBody, full)
     }
 
-    /// Parse markdown to HTML body fragment only (no wrapper, no CSS).
-    static func parseToHTMLBody(_ markdown: String) -> String {
-        #if canImport(CCmarkGfm)
-        ensureGFMExtensions()
-        #endif
-
-        let mermaidResult = extractMermaidBlocks(markdown)
-        // Pre-process base64 data URIs before cmark-gfm (avoids 4096-byte URL limit)
-        let preprocessed = preprocessBase64Images(mermaidResult.text)
-        let bodyHTML = renderBody(preprocessed)
-        return injectHeadingIDs(reinsertMermaidBlocks(bodyHTML, mermaidResult))
-    }
-
     // MARK: - cmark-gfm rendering (with regex fallback)
 
     #if canImport(CCmarkGfm)
@@ -226,24 +213,6 @@ enum MarkdownParser {
         return result
     }
 
-    /// Returns the shell of the preview HTML template — everything except
-    /// the body content. The caller fills <div id="md-content">BODY</div>.
-    /// Used by PreviewWebView to load a valid template before content is ready.
-    /// Includes the mermaid runner script — it's harmless when no mermaid
-    /// blocks exist (typeof check skips execution), but avoids needing a
-    /// full page reload when switching to a file that has mermaid diagrams.
-    static func previewTemplateShell() -> String {
-        let css = previewCSS
-        return """
-        <!DOCTYPE html>
-        <html><head><meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>\(css)</style>
-        \(mermaidHTML())
-        </head><body><div id="md-content"></div></body></html>
-        """
-    }
-
     /// Returns the runner script. mermaid.min.js itself is loaded via
     /// WKUserScript (WebViewPool) so it persists across incremental
     /// DOM updates without re-injecting 3.3MB of JS on every change.
@@ -298,10 +267,17 @@ enum MarkdownParser {
     // MARK: - Helpers
 
     private static func escapeHTML(_ text: String) -> String {
-        text
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
+        var result = ""
+        result.reserveCapacity(text.utf8.count)
+        for char in text {
+            switch char {
+            case "&": result += "&amp;"
+            case "<": result += "&lt;"
+            case ">": result += "&gt;"
+            default:  result.append(char)
+            }
+        }
+        return result
     }
 
     // MARK: - Preview CSS

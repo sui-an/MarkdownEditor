@@ -5,7 +5,6 @@ import AppKit
 // MARK: - Per-WebView state + navigation delegate
 
 final class WebViewState: NSObject, WKNavigationDelegate {
-    var templateReady = false
     var needsScrollReset = false
     var lastBodyHTML = ""
     var hasLoadedContent = false
@@ -22,7 +21,6 @@ final class WebViewState: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        templateReady = true
         // If body content was already saved before the template finished loading
         // (e.g. re-attaching a cached WebView where content had been generated),
         // inject it now so the preview isn't blank.
@@ -40,61 +38,15 @@ final class WebViewState: NSObject, WKNavigationDelegate {
     }
 
     func updateBodyViaJS(_ webView: WKWebView, bodyHTML: String, searchQuery: String = "") {
-        guard let encoded = try? JSONEncoder().encode(bodyHTML),
-              let jsonStr = String(data: encoded, encoding: .utf8) else { return }
-        let escapedQuery = (try? JSONEncoder().encode(searchQuery))
-            .flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
+        let jsonStr = String.jsLiteral(bodyHTML)
         webView.evaluateJavaScript("""
         document.getElementById('md-content').innerHTML = \(jsonStr);
         if (typeof hljs !== 'undefined') hljs.highlightAll();
         if (typeof mermaid !== 'undefined') mermaid.run({ querySelector: '.mermaid' });
-        (function() {
-            var q = \(escapedQuery);
-            if (!q) return;
-            var lowerQ = q.toLowerCase();
-            var walker = document.createTreeWalker(document.getElementById('md-content'), NodeFilter.SHOW_TEXT, null, false);
-            var nodes = [];
-            while (walker.nextNode()) { nodes.push(walker.currentNode); }
-            for (var n = 0; n < nodes.length; n++) {
-                var node = nodes[n];
-                var text = node.textContent;
-                var lower = text.toLowerCase();
-                var idx = 0;
-                var fragments = [];
-                var lastEnd = 0;
-                while ((idx = lower.indexOf(lowerQ, idx)) !== -1) {
-                    if (idx > lastEnd) fragments.push(document.createTextNode(text.substring(lastEnd, idx)));
-                    var mark = document.createElement('mark');
-                    mark.className = 'search-result';
-                    mark.textContent = text.substring(idx, idx + q.length);
-                    fragments.push(mark);
-                    idx += q.length;
-                    lastEnd = idx;
-                }
-                if (lastEnd < text.length) fragments.push(document.createTextNode(text.substring(lastEnd)));
-                if (fragments.length > 0) {
-                    var parent = node.parentNode;
-                    var span = document.createElement('span');
-                    fragments.forEach(function(f) { span.appendChild(f); });
-                    parent.replaceChild(span, node);
-                }
-            }
-        })();
+        \(SearchJS.highlight(query: searchQuery))
         """)
     }
 
-    func updateBaseURL(_ webView: WKWebView, baseURL: URL?) {
-        guard let baseURLStr = baseURL?.absoluteString else { return }
-        let escaped = (try? JSONEncoder().encode(baseURLStr))
-            .flatMap { String(data: $0, encoding: .utf8) } ?? baseURLStr
-        webView.evaluateJavaScript("""
-        var oldBase = document.querySelector('base');
-        if (oldBase) oldBase.remove();
-        var base = document.createElement('base');
-        base.href = \(escaped);
-        document.head.appendChild(base);
-        """)
-    }
 }
 
 // MARK: - WebView cache (per-fileID)
@@ -250,7 +202,7 @@ struct PreviewWebView: NSViewRepresentable {
     let fileURL: URL?
     let fileID: UUID?
     var viewRefs: ViewRefs?
-    let previewContentWide: Bool
+    let previewContentWidth: Int
     var themeMode: String = "system"
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -273,15 +225,15 @@ struct PreviewWebView: NSViewRepresentable {
         let (webView, state) = WebViewCache.shared.webView(for: fileID, url: fileURL)
 
         // Theme change — @AppStorage triggers updateNSView directly
-        if context.coordinator.lastThemeMode != themeMode {
-            context.coordinator.lastThemeMode = themeMode
-            let isDark = ThemeManager.isDark(for: themeMode)
+        let isDark = ThemeManager.isDark(for: themeMode)
+        if context.coordinator.lastAppliedIsDark != isDark {
+            context.coordinator.lastAppliedIsDark = isDark
             injectTheme(webView, isDark: isDark)
         }
 
         if context.coordinator.currentWebView !== webView {
             context.coordinator.currentWebView = webView
-            context.coordinator.lastPreviewContentWide = nil
+            context.coordinator.lastPreviewContentWidth = nil
             viewRefs?.webView = webView
 
             state.configureScrollView(webView)
@@ -314,11 +266,10 @@ struct PreviewWebView: NSViewRepresentable {
                     state.lastBodyHTML = bodyHTML
                     state.updateBodyViaJS(webView, bodyHTML: bodyHTML, searchQuery: viewRefs?.lastSearchQuery ?? "")
                 }
-                // Toggle content width based on previewContentWide setting
-                if context.coordinator.lastPreviewContentWide != previewContentWide {
-                    context.coordinator.lastPreviewContentWide = previewContentWide
-                    let maxWidth = previewContentWide ? "none" : "720px"
-                    let margin = previewContentWide ? "0" : "0 auto"
+                // Toggle content width based on previewContentWidth setting
+                if context.coordinator.lastPreviewContentWidth != previewContentWidth {
+                    context.coordinator.lastPreviewContentWidth = previewContentWidth
+                    let (maxWidth, margin) = widthValues(previewContentWidth)
                     webView.evaluateJavaScript("""
                         document.body.style.maxWidth = "\(maxWidth)";
                         document.body.style.margin = "\(margin)";
@@ -342,8 +293,8 @@ struct PreviewWebView: NSViewRepresentable {
 
     final class Coordinator {
         var currentWebView: WKWebView?
-        var lastPreviewContentWide: Bool?
-        var lastThemeMode: String = "system"
+        var lastPreviewContentWidth: Int?
+        var lastAppliedIsDark: Bool?
         private var themeObserver: Any?
 
         init() {
@@ -355,6 +306,8 @@ struct PreviewWebView: NSViewRepresentable {
                 guard let self,
                       let webView = self.currentWebView else { return }
                 let isDark = (notification.userInfo?["isDark"] as? Bool) ?? false
+                guard lastAppliedIsDark != isDark else { return }
+                lastAppliedIsDark = isDark
                 injectTheme(webView, isDark: isDark)
             }
         }
@@ -375,6 +328,16 @@ private func findScrollView(in view: NSView) -> NSScrollView? {
         }
     }
     return nil
+}
+
+// MARK: - Helpers
+
+private func widthValues(_ mode: Int) -> (maxWidth: String, margin: String) {
+    switch mode {
+    case 1: return ("960px", "0 auto")
+    case 2: return ("none", "0 auto")
+    default: return ("720px", "0 auto")
+    }
 }
 
 // MARK: - Theme injection

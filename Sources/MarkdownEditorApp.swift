@@ -184,7 +184,7 @@ struct TogglePreviewCommand: View {
     @AppStorage("previewOnly") private var previewOnly = true
 
     var body: some View {
-        Button("Preview Only") {
+        Button(previewOnly ? "Show Editor" : "Preview Only") {
             previewOnly.toggle()
         }
         .keyboardShortcut("p", modifiers: [.command, .shift])

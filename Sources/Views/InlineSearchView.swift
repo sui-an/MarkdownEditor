@@ -74,9 +74,7 @@ final class SearchPanel: NSPanel {
         }
         // Clear preview highlights
         viewRefs?.lastSearchQuery = ""
-        webView()?.evaluateJavaScript("""
-        document.querySelectorAll('mark.search-result').
-        """)
+        webView()?.evaluateJavaScript(SearchJS.clearHighlights())
         searchState.isVisible = false
         super.close()
     }
@@ -303,64 +301,7 @@ struct InlineSearchView: View {
         let query = searchState.query
         let currentIdx = searchState.matches.isEmpty ? -1 : searchState.currentMatchIndex
         viewRefs?.lastSearchQuery = query
-        let escapedQuery = (try? JSONEncoder().encode(query))
-            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
-
-        let js = """
-        (function() {
-            document.querySelectorAll('mark.search-result').forEach(function(m) {
-                m.replaceWith(m.textContent);
-            });
-            if (!\(escapedQuery)) return;
-            var q = \(escapedQuery);
-            var currentIdx = \(currentIdx);
-            var lowerQ = q.toLowerCase();
-            var walker = document.createTreeWalker(document.getElementById('md-content') || document.body, NodeFilter.SHOW_TEXT, null, false);
-            var nodes = [];
-            while (walker.nextNode()) { nodes.push(walker.currentNode); }
-            var matchCount = 0;
-            for (var n = 0; n < nodes.length; n++) {
-                var node = nodes[n];
-                var text = node.textContent;
-                var lower = text.toLowerCase();
-                var idx = 0;
-                var fragments = [];
-                var lastEnd = 0;
-                while ((idx = lower.indexOf(lowerQ, idx)) !== -1) {
-                    if (idx > lastEnd) {
-                        fragments.push(document.createTextNode(text.substring(lastEnd, idx)));
-                    }
-                    var mark = document.createElement('mark');
-                    var isCurrent = (matchCount === currentIdx);
-                    mark.className = isCurrent ? 'search-result current-match' : 'search-result';
-                    if (isCurrent) mark.id = 'search-current-match';
-                    mark.textContent = text.substring(idx, idx + q.length);
-                    fragments.push(mark);
-                    idx += q.length;
-                    lastEnd = idx;
-                    matchCount++;
-                }
-                if (lastEnd < text.length) {
-                    fragments.push(document.createTextNode(text.substring(lastEnd)));
-                }
-                if (fragments.length > 0) {
-                    var parent = node.parentNode;
-                    var container = document.createElement('span');
-                    fragments.forEach(function(f) { container.appendChild(f); });
-                    parent.replaceChild(container, node);
-                    nodes[n] = container;
-                }
-            }
-            var currentEl = document.getElementById('search-current-match');
-            if (currentEl) {
-                currentEl.scrollIntoView({ behavior: 'instant', block: 'center' });
-            }
-        })();
-        """
-
-        DispatchQueue.main.async {
-            wv.evaluateJavaScript(js) { _, _ in }
-        }
+        wv.evaluateJavaScript(SearchJS.highlight(query: query, currentIndex: currentIdx))
     }
 }
 

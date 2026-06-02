@@ -50,9 +50,11 @@ final class LineNumberSideView: NSView {
         guard cachedTextLength != currentLength else { return }
 
         var positions: [Int] = []
-        for i in 0..<currentLength {
-            if text.character(at: i) == 0x0A {
-                positions.append(i)
+        var range = NSRange(location: 0, length: 0)
+        while range.location < currentLength {
+            range = text.lineRange(for: NSRange(location: NSMaxRange(range), length: 0))
+            if range.location < currentLength {
+                positions.append(range.location)
             }
         }
         newlinePositions = positions

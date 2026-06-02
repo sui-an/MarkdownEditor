@@ -6,12 +6,6 @@ enum FileService {
         try String(contentsOf: url, encoding: .utf8)
     }
 
-    /// Synchronous read used only during cache-hit fast path (main thread safe because
-    /// the file is already known to exist and is small enough for instant read).
-    static func readFileCached(at url: URL) -> String {
-        (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-    }
-
     static func writeFile(_ content: String, to url: URL) throws {
         try content.write(to: url, atomically: true, encoding: .utf8)
     }
@@ -19,7 +13,7 @@ enum FileService {
     static func scanDirectory(at url: URL) throws -> FileTreeItem {
         let fm = FileManager.default
         let name = url.lastPathComponent
-        var root = FileTreeItem(url: url, name: name, isDirectory: true, parentID: nil)
+        var root = FileTreeItem(url: url, name: name, isDirectory: true, parentID: nil, children: [])
 
         guard let enumerator = fm.enumerator(
             at: url,

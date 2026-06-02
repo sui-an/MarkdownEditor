@@ -94,10 +94,6 @@ final class EditorScrollView: NSScrollView {
     private var lastNonZeroHorizontalOffset: CGFloat = 0
     private var pendingRestoreOffset: CGFloat = 0
 
-    func clearPendingRestoreOffset() {
-        pendingRestoreOffset = 0
-    }
-
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         contentView.postsBoundsChangedNotifications = true
@@ -320,11 +316,7 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.font = NSFont.systemFont(ofSize: 13)
         let paragraphStyle = NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
-        var stops: [NSTextTab] = []
-        for i in 1..<20 {
-            stops.append(NSTextTab(type: .leftTabStopType, location: CGFloat(i * 28)))
-        }
-        paragraphStyle.tabStops = stops
+        paragraphStyle.defaultTabInterval = 28
         textView.defaultParagraphStyle = paragraphStyle
 
         textView.registerForDraggedTypes([
@@ -357,25 +349,16 @@ struct MarkdownTextView: NSViewRepresentable {
         let coordinator = context.coordinator
 
         let isDark = ThemeManager.isDark(for: themeMode)
-        textView.textColor = isDark
-            ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
-            : NSColor(calibratedWhite: 0.08, alpha: 1.0)
 
-        if coordinator.lastThemeMode != themeMode {
-            coordinator.lastThemeMode = themeMode
-            scrollView.backgroundColor = notesBackgroundColor(isDark: isDark)
-            textView.drawsBackground = true
-            textView.backgroundColor = notesBackgroundColor(isDark: isDark)
-            textView.insertionPointColor = isDark
+        if coordinator.lastAppliedIsDark != isDark {
+            coordinator.lastAppliedIsDark = isDark
+            ThemeManager.applyTheme(textView: textView, scrollView: scrollView, lineNumberView: wrapper.lineNumberView, isDark: isDark)
+        } else {
+            // Still update text color even if theme didn't change, so new text
+            // without syntax highlighting has the correct default foreground.
+            textView.textColor = isDark
                 ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
                 : NSColor(calibratedWhite: 0.08, alpha: 1.0)
-            wrapper.lineNumberView.isDark = isDark
-            wrapper.lineNumberView.needsDisplay = true
-            scrollView.needsDisplay = true
-            textView.needsDisplay = true
-            if let storage = textView.textStorage as? MarkdownTextStorage {
-                storage.rehighlightAll(isDark: isDark)
-            }
         }
 
         // Fast path: raw strings match — no text change, skip expensive buildCleanMarkdown
@@ -427,8 +410,8 @@ struct MarkdownTextView: NSViewRepresentable {
         var suppressTextDidChange = false
         /// Tracks the last opened file URL so we can detect document switches.
         var lastFileURL: URL?
-        /// Tracks the last known theme mode so we can detect appearance changes.
-        var lastThemeMode: String = "system"
+        /// Tracks the last applied isDark value to deduplicate theme application.
+        var lastAppliedIsDark: Bool?
         private var themeObserver: Any?
         /// Cache of decoded NSImages keyed by URL string. Avoids re-decoding
         /// base64 images on every processInlineImages call (the biggest bottleneck
@@ -455,27 +438,14 @@ struct MarkdownTextView: NSViewRepresentable {
                 object: nil,
                 queue: .main
             ) { [weak self] notification in
-                guard let self,
+                 guard let self,
                       let textView = self.textView,
                        let wrapper = self.editorWrapper else { return }
                 let scrollView = wrapper.scrollView
                 let isDark = (notification.userInfo?["isDark"] as? Bool) ?? false
-                scrollView.backgroundColor = notesBackgroundColor(isDark: isDark)
-                textView.drawsBackground = true
-                textView.backgroundColor = notesBackgroundColor(isDark: isDark)
-                textView.textColor = isDark
-                    ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
-                    : NSColor(calibratedWhite: 0.08, alpha: 1.0)
-                textView.insertionPointColor = isDark
-                    ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
-                    : NSColor(calibratedWhite: 0.08, alpha: 1.0)
-                wrapper.lineNumberView.isDark = isDark
-                wrapper.lineNumberView.needsDisplay = true
-                scrollView.needsDisplay = true
-                textView.needsDisplay = true
-                if let storage = textView.textStorage as? MarkdownTextStorage {
-                    storage.rehighlightAll(isDark: isDark)
-                }
+                guard lastAppliedIsDark != isDark else { return }
+                lastAppliedIsDark = isDark
+                ThemeManager.applyTheme(textView: textView, scrollView: scrollView, lineNumberView: wrapper.lineNumberView, isDark: isDark)
             }
         }
 
@@ -509,9 +479,6 @@ struct MarkdownTextView: NSViewRepresentable {
             scheduleImageProcessing()
         }
 
-        /// Enumerate \u{FFFC} attachment chars and replace them with their
-        /// markdown source strings WITHOUT modifying text storage. This is the
-        /// non-mutating counterpart of restoreImageAttachmentsToMarkdown.
         func buildCleanMarkdown(from storage: NSTextStorage) -> String {
             let fullRange = NSRange(location: 0, length: storage.length)
             let result = NSMutableString(string: storage.string)
@@ -529,15 +496,6 @@ struct MarkdownTextView: NSViewRepresentable {
         func scheduleImageProcessing() {
             NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(processInlineImages), object: nil)
             perform(#selector(processInlineImages), with: nil, afterDelay: 0.2)
-        }
-
-        func restoreImageAttachmentsToMarkdown(in textStorage: NSTextStorage) {
-            let fullRange = NSRange(location: 0, length: textStorage.length)
-            textStorage.enumerateAttribute(.attachment, in: fullRange, options: .reverse) { value, range, _ in
-                if let attachment = value as? MarkdownImageAttachment, !attachment.markdownSource.isEmpty {
-                    textStorage.replaceCharacters(in: range, with: attachment.markdownSource)
-                }
-            }
         }
 
         @objc private func processInlineImages() {
@@ -599,12 +557,12 @@ struct MarkdownTextView: NSViewRepresentable {
                 if size.width < 20 { size.width = 20 }
                 if size.height < 20 { size.height = 20 }
 
-                let displayImage = NSImage(size: size)
-                displayImage.lockFocus()
-                image.draw(in: NSRect(origin: .zero, size: size),
-                           from: NSRect(origin: .zero, size: image.size),
-                           operation: .copy, fraction: 1.0)
-                displayImage.unlockFocus()
+                let displayImage = NSImage(size: size, flipped: false) { _ in
+                    image.draw(in: NSRect(origin: .zero, size: size),
+                               from: NSRect(origin: .zero, size: image.size),
+                               operation: .copy, fraction: 1.0)
+                    return true
+                }
 
                 // Store in cache for next time
                 Self.imageCache.setObject(displayImage, forKey: cacheKey, cost: Int(size.width * size.height * 4))

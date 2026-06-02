@@ -90,6 +90,25 @@ final class ThemeManager {
         }
     }
 
+    static func applyTheme(textView: NSTextView, scrollView: NSScrollView, lineNumberView: LineNumberSideView, isDark: Bool) {
+        scrollView.backgroundColor = notesBackgroundColor(isDark: isDark)
+        textView.drawsBackground = true
+        textView.backgroundColor = notesBackgroundColor(isDark: isDark)
+        textView.textColor = isDark
+            ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.08, alpha: 1.0)
+        textView.insertionPointColor = isDark
+            ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.08, alpha: 1.0)
+        lineNumberView.isDark = isDark
+        lineNumberView.needsDisplay = true
+        scrollView.needsDisplay = true
+        textView.needsDisplay = true
+        if let storage = textView.textStorage as? MarkdownTextStorage {
+            storage.rehighlightAll(isDark: isDark)
+        }
+    }
+
     // MARK: - Private
 
     private func computeIsDark(for mode: String) -> Bool {

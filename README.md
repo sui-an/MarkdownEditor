@@ -8,20 +8,22 @@ A native macOS Markdown editor styled after Apple Notes, with live preview, synt
 
 - **Three-pane layout** — Sidebar (file browser) | Editor (source) | Preview (rendered HTML)
 - **Live preview** — Markdown renders in real time as you type; full HTML template with dark/light mode support
-- **Syntax highlighting in editor** — Headers, bold, italic, code, links, blockquotes, strikethrough, and images highlighted inline via `NSTextStorage`
+- **Syntax highlighting in editor** — Headers, bold, italic, code, links, blockquotes, strikethrough, and images highlighted inline via `NSTextStorage`; dark/light palette resolved at highlight time without static side channels
 - **Mermaid diagrams** — ````mermaid``` blocks render as SVG diagrams in the preview using [Mermaid](https://mermaid.js.org/) (v10)
 - **Code syntax highlighting in preview** — Fenced code blocks highlighted via [highlight.js](https://highlightjs.org/) (v11)
 - **GFM rendering** — Tables, strikethrough, task lists, autolinks via [cmark-gfm](https://github.com/github/cmark-gfm) (with regex fallback when unavailable)
 - **Image drag-and-drop / paste** — Drag images from Finder or paste from clipboard; embedded as base64 data URIs for self-contained `.md` files
-- **File browser sidebar** — Browse all `.md` files in a folder recursively; pin frequently accessed files as individual tabs
+- **File browser sidebar** — Browse all `.md` files in a folder recursively; correct deep-directory hierarchy preserved (3+ levels)
 - **Multi-window** — Cmd+Shift+N opens a new window, each with independent state
 - **Session restore** — Last opened file is restored on next launch automatically
-- **External change detection** — Prompts to reload when a file is modified by another app
-- **Line numbers** — Gutter with efficient O(log n) newline-position cache for large files
-- **Search & Replace** — Cmd+F opens floating search panel with match navigation (▲/▼) and replace support; works in both editor and preview-only mode
-- **Outline panel** — Cmd+Shift+O shows a floating heading navigator; click to scroll to section in preview
-- **Preview-only mode** — Hide the editor pane for distraction-free reading; search overlay available
-- **Performance** — LRU caches for file content (20 entries) and rendered HTML (NSCache + secondary dictionary), cancellation-based async HTML generation, debounced preview updates
+- **External change detection** — Prompts to reload when a file is modified by another app; path prefix comparison correctly scoped to the folder boundary
+- **Line numbers** — Gutter with line-boundary enumeration (not character-by-character scan) for large files
+- **Search & Replace** — Cmd+F opens floating search panel with match navigation (▲/▼) and replace support; preserves user's current match index across searches; works in both editor and preview-only mode
+- **Preview search** — Preview-only mode overlay with independent search state
+- **Outline panel** — Cmd+Shift+O shows a floating heading navigator; ignores headings inside fenced code blocks; click to scroll to section in preview
+- **Preview-only mode** — Hide the editor pane for distraction-free reading; search bar overlay available; three preview widths (720px / 960px / full)
+- **Preview width toggle** — Cycle through three content widths (`Cmd+W`) in preview-only mode: compact, wide, full-width centered
+- **Folder management** — Open folders to browse their `.md` files recursively; right-click to close folders (no X button)
 - **Apple Notes-like aesthetic** — Clean, minimal interface with system accent color
 
 ## Requirements
@@ -69,12 +71,13 @@ The built app will be at `MarkdownEditor.app` and the DMG at `MarkdownEditor.dmg
 | Save | `Cmd+S` |
 | Search | `Cmd+F` |
 | Toggle Outline | `Cmd+Shift+O` |
-| Toggle Preview Only | (View menu) |
+| Toggle Preview Only | `Cmd+Shift+P` |
+| Cycle Preview Width | `Cmd+W` |
 
 ### Search & Replace
 
-1. Press `Cmd+F` to open the floating search panel
-2. Type your query — matches are highlighted in both editor and preview
+1. Press `Cmd+F` to open the floating search panel — matches highlight in both editor (NSTextView background) and preview (DOM `<mark>` elements)
+2. Type your query — your current match position is preserved across successive searches
 3. Navigate with ▲/▼ buttons or `Enter`/`Shift+Enter`
 4. Click **Replace** to expand the replace row
 5. Use **Replace** or **Replace All** to modify text
@@ -102,52 +105,59 @@ Drag an image from Finder into the editor, or copy an image from another app and
 ```
 MarkdownEditor/
 ├── Sources/
-│   ├── MarkdownEditorApp.swift      # App entry, menu commands
+│   ├── MarkdownEditorApp.swift          # App entry, menu commands
 │   ├── Models/
-│   │   ├── AppState.swift           # Global state, caches, file operations
-│   │   ├── FileTreeItem.swift       # File/directory tree model
-│   │   ├── HeadingItem.swift        # Outline heading model
-│   │   ├── SearchState.swift        # Search logic, match tracking
-│   │   └── ViewRefs.swift           # Weak references to editor/preview views
+│   │   ├── AppState.swift               # Global state, caches, file operations
+│   │   ├── FileTreeItem.swift           # File/directory tree model
+│   │   ├── HeadingItem.swift            # Outline heading model
+│   │   ├── LRUCache.swift               # Generic LRU cache for rendered HTML
+│   │   ├── SearchState.swift            # Search logic, match tracking
+│   │   └── ViewRefs.swift               # Weak references to editor/preview views
 │   ├── Services/
-│   │   ├── FileService.swift        # File I/O, directory scanning
-│   │   ├── FolderWatcher.swift      # FSEvents for external change detection
-│   │   ├── HeadingParser.swift      # Markdown heading extraction
-│   │   ├── ImageHandler.swift       # Image drag/paste → base64 data URI
-│   │   ├── MarkdownParser.swift     # Markdown → HTML (cmark-gfm + regex fallback)
-│   │   └── SessionRestoreService.swift  # Bookmark-based session persistence
+│   │   ├── FileService.swift            # File I/O, directory scanning (recursive tree builder)
+│   │   ├── FolderWatcher.swift          # FSEvents for external change detection
+│   │   ├── HeadingParser.swift          # Markdown heading extraction (skips fenced code blocks)
+│   │   ├── ImageHandler.swift           # Image drag/paste → base64 data URI
+│   │   ├── MarkdownParser.swift         # Markdown → HTML (cmark-gfm + regex fallback)
+│   │   ├── SearchJS.swift               # Shared JavaScript module for preview search highlighting
+│   │   ├── SessionRestoreService.swift  # Bookmark-based session persistence
+│   │   └── ThemeManager.swift           # Light/dark appearance management + applyTheme helper
 │   ├── Views/
-│   │   ├── ContentView.swift        # Root view, search/outline panel management
-│   │   ├── InlineSearchView.swift   # Floating search panel (NSPanel)
-│   │   ├── OutlinePanelView.swift   # Floating outline window
-│   │   ├── ResizableHSplitView.swift # Custom split view between editor/preview
+│   │   ├── ContentView.swift            # Root view, search/outline panel management
+│   │   ├── InlineSearchView.swift       # Floating search panel (NSPanel)
+│   │   ├── OutlinePanelView.swift       # Floating outline window
+│   │   ├── ResizableHSplitView.swift    # Custom split view between editor/preview
 │   │   ├── Editor/
-│   │   │   ├── EditorContainerView.swift  # Editor entry point
-│   │   │   ├── LineNumberSideView.swift   # Efficient line number gutter
+│   │   │   ├── EditorContainerView.swift  # Editor entry point, loading overlay
+│   │   │   ├── LineNumberSideView.swift   # Line number gutter (boundary enumeration)
 │   │   │   ├── MarkdownTextStorage.swift  # NSTextStorage with inline highlighting
 │   │   │   └── MarkdownTextView.swift     # NSTextView subclass with image support
 │   │   ├── Preview/
 │   │   │   ├── PreviewWebView.swift       # WKWebView management + WebView cache
-│   │   │   └── PreviewSearchOverlay.swift  # Preview-only search bar
+│   │   │   └── PreviewSearchOverlay.swift # Preview-only search bar overlay
 │   │   └── Sidebar/
 │   │       ├── FileRowView.swift          # File list item
-│   │       ├── FolderHeaderView.swift     # Folder header with remove action
-│   │       └── SidebarView.swift          # File browser sidebar
+│   │       ├── FolderHeaderView.swift     # Folder header with right-click remove
+│   │       └── SidebarView.swift          # File browser sidebar with folder tree
 │   └── CCmarkGfm/
 │       └── module.modulemap               # C interop module map for cmark-gfm
 ├── Resources/
-│   ├── Assets.xcassets/                    # App icon assets
-│   ├── mermaid.min.js                      # Mermaid rendering (3.2MB, bundled)
-│   └── highlight.min.js                    # Code syntax highlighting (120KB, bundled)
-├── build.sh                                # Build script (swiftc)
-└── package.sh                              # DMG packaging script
+│   ├── Assets.xcassets/                   # App icon assets
+│   ├── mermaid.min.js                     # Mermaid diagram rendering
+│   └── highlight.min.js                   # Code syntax highlighting in preview
+├── build.sh                               # swiftc build script
+├── package.sh                             # DMG packaging script
+├── download_mermaid.sh                    # Mermaid download helper
+├── generate_xcodeproj.rb                  # Xcode project generator
+├── MarkdownEditor.icns                    # App icon
+└── README.md
 ```
 
 ## Architecture
 
 ### Build system
 
-The project uses a plain `swiftc` invocation via `build.sh` rather than Xcode. This keeps the build fast and reproducible without requiring Xcode to be installed. An Xcode project can be generated via `generate_xcodeproj.rb` if needed.
+The project uses a plain `swiftc` invocation via `build.sh` rather than Xcode. Source files are enumerated explicitly in the script, with `-O` optimization and macOS 14.0 target. An Xcode project can be generated via `generate_xcodeproj.rb` if needed.
 
 ```
 build.sh → swiftc -O → .app bundle → codesign
@@ -160,22 +170,73 @@ User types in NSTextView
   → @Binding updates AppState.currentFileContent
     → onChange fires AppState.updateContent()
       → Debounced (200ms / 500ms for large files)
-        → MarkdownParser.parseToHTML() on background queue
+        → refreshOutline() on .utility queue (separate generation counter)
+        → MarkdownParser.parseToHTML() on .userInitiated queue
           → cmark-gfm (preferred) or regex fallback
             → PreviewWebView.updateBodyViaJS()
               → WKWebView sets innerHTML, re-runs hljs + mermaid
+              → SearchJS.highlight() re-applies search marks on content updates
 ```
+
+### State management
+
+All global state lives in `AppState`, marked with Swift 5.9 `@Observable`. No Combine or ObservableObject. SwiftUI views subscribe automatically through the observation framework.
+
+Two monotonically increasing generation counters prevent stale async results:
+- **HTML generation** — incremented on each file switch; background HTML results with a stale token are discarded
+- **Outline generation** — separate counter prevents fast-typing race conditions where an old outline work item overwrites a newer one
+
+### File loading & loading indicator
+
+`AppState.loadFileContent()` follows a tiered strategy:
+1. **In-memory content cache** — zero disk IO if previously loaded
+2. **NSCache (HTML)** — memory-pressure aware, 20 entries, 30MB cost limit
+3. **LRUCache (HTML)** — deterministic backup, 10 entries, survives NSCache eviction
+4. **Disk read** — background queue, content shown immediately, HTML generated asynchronously
+
+The `isLoadingFile` flag is correctly cleared on all code paths (cache hit, cache miss, and content-cache-hit-with-HTML-miss — the cache-hit/HTML-miss path was missing the `isLoadingFile = false` assignment).
+
+### Outline parsing
+
+`HeadingParser.parse()` skips headings inside fenced code blocks (``` and ~~~). The `buildTree()` function uses a tuple-based stack approach (`(item, children)`) rather than modifying `HeadingItem` value-types on the stack — since `HeadingItem` is a struct, in-place mutations on a stack copy wouldn't propagate back to the root array. A separate `outlineGeneration` counter prevents stale background results from overwriting fresh ones during fast typing.
 
 ### Caching
 
-- **File content**: LRU dictionary (20 entries), updated on edit, zero disk IO on file switch
-- **Rendered HTML**: `NSCache` (memory-pressure aware, 30MB cost limit) + secondary LRU dictionary (survives NSCache eviction, 10 entries)
-- **WebView**: Per-fileID WKWebView cache (10 entries), preserves scroll position and JS state across file switches
-- **Cache invalidation**: Generation counter (`OSAtomicIncrement64`) cancels stale async computations when the user switches files faster than rendering completes
+| Cache | Type | Limit | Notes |
+|-------|------|-------|-------|
+| File content | `[URL: String]` + access-order LRU | 20 entries | Zero disk IO on tab switch |
+| HTML (primary) | `NSCache<NSURL, CachedHTML>` | 20 entries, 30MB | Purged under memory pressure |
+| HTML (secondary) | `LRUCache<URL, CachedHTML>` | 10 entries | Survives NSCache eviction |
+| WebView | Per-fileID dictionary | 10 entries | Preserves scroll position & JS state |
+| Inline images | `NSCache<NSString, NSImage>` | 50 entries, 100MB | Avoids re-decoding base64 |
 
-### Observability
+### Search highlighting (Preview)
 
-The app uses Swift 5.9 `@Observable` macro for state management. No Combine or ObservableObject. Views automatically subscribe to observed properties through SwiftUI's observation framework.
+Three UI entry points share a single `SearchJS` module for DOM-based search traversal:
+
+- **InlineSearchView** — editor + preview search panel
+- **PreviewSearchOverlay** — preview-only mode search bar
+- **PreviewWebView.updateBodyViaJS** — re-applies marks on every body content update
+
+The JavaScript walks text nodes via `document.createTreeWalker`, case-insensitively matches, wraps hits in `<mark class="search-result">`, supports a current-match highlight (`current-match` class + `scrollIntoView`), and returns match count via JSON. All three callers use the same `SearchJS.highlight(query:currentIndex:)` function, eliminating ~150 lines of duplicated JS. The `SearchPanel.close()` method uses `SearchJS.clearHighlights()` instead of constructing a broken JS string inline, fixing a truncated-script bug.
+
+### Theme application
+
+`ThemeManager` is the single source of truth for light/dark appearance:
+- Reads `UserDefaults["themeMode"]` (`"system"`, `"light"`, `"dark"`)
+- For `"system"` mode, returns `NSApp.effectiveAppearance` (`.dark`/`.light`) instead of `nil` — avoids a NavigationSplitView bug where the sidebar doesn't re-render when transitioning from an explicit value to `nil`
+- Applies `NSApp.appearance` and posts `themeDidChange` notification
+- `ThemeManager.applyTheme(textView:scrollView:lineNumberView:isDark:)` is a single static method used by both `MarkdownTextView.updateNSView` and the coordinator's `themeDidChange` observer, eliminating duplicate color-setup code
+- Syntax highlighting colors accept `isDark` as a parameter directly instead of reading a static side channel (`_forceDarkMode` was removed)
+- Both `MarkdownTextView.Coordinator` and `PreviewWebView.Coordinator` track `lastAppliedIsDark` to deduplicate theme application — when the user switches themes, the notification observer and SwiftUI's `updateNSView` both fire; `lastAppliedIsDark` ensures `rehighlightAll()` and `injectTheme()` run only once per actual change
+
+### Directory tree building
+
+`FileService.scanDirectory()` uses `FileManager.enumerator` with a recursive `appendToTree()` function instead of a flat children array lookup. The root `FileTreeItem` is initialized with `children: []` so that `children?.append()` is effective. This correctly handles files nested 3+ levels deep. When external file changes are detected, `AppState.insertInTree()` inserts new files into the correct hierarchical position without flattening the tree (the previous code replaced the hierarchical structure with a flat sorted `allMarkdownFiles` list).
+
+### Image processing
+
+Images are embedded as base64 data URIs for self-contained files. `MarkdownTextView.Coordinator` processes `![]()` patterns on a 0.2s delay, replacing them with `NSTextAttachment` subviews using a decoded image cache (50 entries, 100MB). The non-mutating `buildCleanMarkdown` reads attachment sources without modifying text storage.
 
 ## Dependencies
 
@@ -203,22 +264,37 @@ brew install cmark-gfm
 bash build.sh   # Rebuild — the script auto-detects Homebrew installations
 ```
 
-Mermaid JS injection
-```
-Resources/
-├── Info.plist
-├── Assets.xcassets/AppIcon.appiconset/
-└── mermaid.min.js         # Download separately (run download_mermaid.sh)
+### Mermaid JS not found
+
+```bash
+bash download_mermaid.sh   # Downloads to Resources/
+bash build.sh
 ```
 
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
-|---|---|
-| Cmd+O | Open a `.md` file |
-| Cmd+S | Save current file |
-| Cmd+Shift+N | New window |
-| Cmd+V | Paste (auto-detects images) |
+|---|---|---|
+| `Cmd+O` | Open a `.md` file |
+| `Cmd+S` | Save current file |
+| `Cmd+F` | Open search panel |
+| `Cmd+N` | New note |
+| `Cmd+Shift+N` | New window |
+| `Cmd+Shift+O` | Toggle outline panel |
+| `Cmd+Shift+P` | Toggle preview-only mode |
+| `Cmd+Option+S` | Toggle sidebar visibility |
+| `Cmd+W` | Cycle preview width (720px / 960px / full) |
+| `Cmd+V` | Paste (auto-detects images) |
+
+## Performance notes
+
+- **Theme switching** — Both `MarkdownTextView.Coordinator` and `PreviewWebView.Coordinator` track `lastAppliedIsDark` to prevent double `rehighlightAll()` / `injectTheme()` when the notification observer and SwiftUI `updateNSView` both fire on a theme change
+- **Line numbers** use `NSString.lineRange(for:)` for O(log n) newline boundary lookup instead of character-by-character scanning
+- **HTML escaping** uses a single-pass switch-based loop instead of three cascading `replacingOccurrences` calls
+- **Image resizing** uses `NSImage(size:flipped:drawingHandler:)` instead of the deprecated `lockFocus`/`unlockFocus` API
+- **Generation counters** use `&+=` instead of `OSAtomicIncrement64` (all counters are modified on the main thread only)
+- **NSTextTab** replaced loop-based tab setting with `defaultTabInterval = 28`
+- **Heading tree building** uses tuple-based stack to avoid value-type mutation issues with `HeadingItem` structs
 
 ## License
 

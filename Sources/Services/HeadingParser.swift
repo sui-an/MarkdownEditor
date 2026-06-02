@@ -51,10 +51,9 @@ enum HeadingParser {
         }
 
         while let top = stack.popLast() {
-            if let parent = stack.last {
-                var p = parent
-                p.children.append(buildChild(top))
-                stack[stack.count - 1] = p
+            if var parent = stack.last {
+                parent.children.append(buildChild(top))
+                stack[stack.count - 1] = parent
             } else {
                 root.append(buildChild(top))
             }

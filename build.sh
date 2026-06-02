@@ -107,9 +107,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<- PLIST
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.0.1</string>
+	<string>0.0.3</string>
 	<key>CFBundleVersion</key>
-	<string>0.0.1</string>
+	<string>0.0.3</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHumanReadableCopyright</key>
@@ -127,6 +127,7 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Models/AppState.swift"
   "$PROJECT_DIR/Sources/Models/FileTreeItem.swift"
   "$PROJECT_DIR/Sources/Models/HeadingItem.swift"
+  "$PROJECT_DIR/Sources/Models/LRUCache.swift"
   "$PROJECT_DIR/Sources/Models/SearchState.swift"
   "$PROJECT_DIR/Sources/Models/ViewRefs.swift"
   "$PROJECT_DIR/Sources/Services/FileService.swift"
@@ -134,6 +135,7 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Services/HeadingParser.swift"
   "$PROJECT_DIR/Sources/Services/ImageHandler.swift"
   "$PROJECT_DIR/Sources/Services/MarkdownParser.swift"
+  "$PROJECT_DIR/Sources/Services/SearchJS.swift"
   "$PROJECT_DIR/Sources/Services/SessionRestoreService.swift"
   "$PROJECT_DIR/Sources/Services/ThemeManager.swift"
   "$PROJECT_DIR/Sources/Views/ContentView.swift"

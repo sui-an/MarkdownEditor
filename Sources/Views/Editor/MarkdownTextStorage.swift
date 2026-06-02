@@ -88,10 +88,6 @@ final class MarkdownTextStorage: NSTextStorage {
         let safeRange = NSRange(location: range.location, length: min(range.length, length - range.location))
         guard safeRange.length > 0 else { return }
 
-        // Reset foreground to dynamic NSColor.textColor which adapts to
-        // light/dark mode automatically. Only .foregroundColor is touched —
-        // .font is never set globally, preserving CJK font cascading.
-        // Only reset the highlighted range, not the entire document.
         backingStore.addAttribute(.foregroundColor, value: NSColor.textColor, range: safeRange)
 
         let text = backingStore.string as NSString
@@ -99,103 +95,76 @@ final class MarkdownTextStorage: NSTextStorage {
 
         guard textLength < 200_000 else { return }
 
-        // Only run regex on the limited range, not the entire document
-        highlightHeaders(in: text, length: textLength, range: safeRange)
-        highlightBlockquotes(in: text, length: textLength, range: safeRange)
-        highlightCodeBlocks(in: text, length: textLength, range: safeRange)
-        highlightInlinePatterns(in: text, length: textLength, range: safeRange)
+        let isDark = NSApp.effectiveAppearance.name == .darkAqua
+        highlightHeaders(in: text, length: textLength, range: safeRange, isDark: isDark)
+        highlightBlockquotes(in: text, length: textLength, range: safeRange, isDark: isDark)
+        highlightCodeBlocks(in: text, length: textLength, range: safeRange, isDark: isDark)
+        highlightInlinePatterns(in: text, length: textLength, range: safeRange, isDark: isDark)
 
         for layoutManager in layoutManagers {
             layoutManager.invalidateLayout(forCharacterRange: safeRange, actualCharacterRange: nil)
         }
     }
 
-    /// Force re-highlight the entire document. Called when the app appearance
-    /// changes (light↔dark) so syntax colors re-resolve with the correct palette.
-    /// Pass `isDark` to explicitly choose the palette without relying on
-    /// `NSApp.effectiveAppearance` (which may not have propagated yet).
-    func rehighlightAll(isDark: Bool? = nil) {
+    func rehighlightAll(isDark: Bool) {
         let length = backingStore.length
         guard length > 0 else { return }
-
-        // If the caller specified a palette, set it before re-highlighting
-        // so that HighlightColors picks it up.
-        if let isDark {
-            Self._forceDarkMode = isDark
-        }
 
         let fullRange = NSRange(location: 0, length: length)
         backingStore.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
 
         let text = backingStore.string as NSString
         let textLength = text.length
-        highlightHeaders(in: text, length: textLength)
-        highlightBlockquotes(in: text, length: textLength)
-        highlightCodeBlocks(in: text, length: textLength)
-        highlightInlinePatterns(in: text, length: textLength)
+        highlightHeaders(in: text, length: textLength, isDark: isDark)
+        highlightBlockquotes(in: text, length: textLength, isDark: isDark)
+        highlightCodeBlocks(in: text, length: textLength, isDark: isDark)
+        highlightInlinePatterns(in: text, length: textLength, isDark: isDark)
 
         for layoutManager in layoutManagers {
             layoutManager.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
             layoutManager.invalidateDisplay(forCharacterRange: fullRange)
         }
-
-        Self._forceDarkMode = nil
     }
-
-    /// When non-nil, overrides `NSApp.effectiveAppearance` during
-    /// `rehighlightAll()` so the palette is chosen by the requested
-    /// theme mode rather than the (possibly still-transitioning) appearance.
-    private static var _forceDarkMode: Bool?
 
     // MARK: - Semantic highlight colors
 
-    /// Dynamic highlight colors that resolve to different values depending on
-    /// the current effective appearance (light / dark).  Accessed via computed
-    /// properties so they re-read `NSApp.effectiveAppearance` on every call.
     private enum HighlightColors {
-        private static var isDark: Bool {
-            if let force = MarkdownTextStorage._forceDarkMode {
-                return force
-            }
-            return NSApp.effectiveAppearance.name == .darkAqua
-        }
-
-        static var header: NSColor {
+        static func header(_ isDark: Bool) -> NSColor {
             isDark
                 ? NSColor(red: 0.40, green: 0.70, blue: 1.00, alpha: 1)
                 : NSColor(red: 0.00, green: 0.48, blue: 1.00, alpha: 1)
         }
-        static var quote: NSColor {
+        static func quote(_ isDark: Bool) -> NSColor {
             isDark
                 ? NSColor(red: 0.65, green: 0.70, blue: 0.75, alpha: 1)
                 : NSColor(red: 0.50, green: 0.55, blue: 0.60, alpha: 1)
         }
-        static var code: NSColor {
+        static func code(_ isDark: Bool) -> NSColor {
             isDark
                 ? NSColor(red: 0.20, green: 0.80, blue: 0.50, alpha: 1)
                 : NSColor(red: 0.00, green: 0.62, blue: 0.35, alpha: 1)
         }
-        static var link: NSColor {
+        static func link(_ isDark: Bool) -> NSColor {
             isDark
                 ? NSColor(red: 0.80, green: 0.55, blue: 1.00, alpha: 1)
                 : NSColor(red: 0.65, green: 0.35, blue: 0.85, alpha: 1)
         }
-        static var image: NSColor {
+        static func image(_ isDark: Bool) -> NSColor {
             isDark
                 ? NSColor(red: 1.00, green: 0.50, blue: 0.70, alpha: 1)
                 : NSColor(red: 0.90, green: 0.30, blue: 0.55, alpha: 1)
         }
-        static var bold: NSColor {
+        static func bold(_ isDark: Bool) -> NSColor {
             isDark
                 ? NSColor(red: 1.00, green: 0.60, blue: 0.20, alpha: 1)
                 : NSColor(red: 1.00, green: 0.45, blue: 0.00, alpha: 1)
         }
-        static var italic: NSColor {
+        static func italic(_ isDark: Bool) -> NSColor {
             isDark
                 ? NSColor(red: 0.65, green: 0.65, blue: 0.65, alpha: 1)
                 : NSColor(red: 0.50, green: 0.50, blue: 0.50, alpha: 1)
         }
-        static var strike: NSColor {
+        static func strike(_ isDark: Bool) -> NSColor {
             isDark
                 ? NSColor(red: 0.70, green: 0.70, blue: 0.75, alpha: 1)
                 : NSColor(red: 0.60, green: 0.60, blue: 0.65, alpha: 1)
@@ -204,64 +173,64 @@ final class MarkdownTextStorage: NSTextStorage {
 
     // MARK: - Headers
 
-    private func highlightHeaders(in text: NSString, length: Int, range: NSRange? = nil) {
+    private func highlightHeaders(in text: NSString, length: Int, range: NSRange? = nil, isDark: Bool) {
         let searchRange = range ?? NSRange(location: 0, length: length)
         for match in Self.headerRegex.matches(in: text as String, range: searchRange) {
-            backingStore.addAttribute(.foregroundColor, value: HighlightColors.header, range: match.range)
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.header(isDark), range: match.range)
         }
     }
 
     // MARK: - Blockquotes
 
-    private func highlightBlockquotes(in text: NSString, length: Int, range: NSRange? = nil) {
+    private func highlightBlockquotes(in text: NSString, length: Int, range: NSRange? = nil, isDark: Bool) {
         let searchRange = range ?? NSRange(location: 0, length: length)
         for match in Self.blockquoteRegex.matches(in: text as String, range: searchRange) {
-            backingStore.addAttribute(.foregroundColor, value: HighlightColors.quote, range: match.range)
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.quote(isDark), range: match.range)
         }
     }
 
     // MARK: - Code Blocks
 
-    private func highlightCodeBlocks(in text: NSString, length: Int, range: NSRange? = nil) {
+    private func highlightCodeBlocks(in text: NSString, length: Int, range: NSRange? = nil, isDark: Bool) {
         let searchRange = range ?? NSRange(location: 0, length: length)
         for match in Self.codeBlockRegex.matches(in: text as String, range: searchRange) {
-            backingStore.addAttribute(.foregroundColor, value: HighlightColors.code, range: match.range)
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.code(isDark), range: match.range)
         }
     }
 
     // MARK: - Inline Patterns
 
-    private func highlightInlinePatterns(in text: NSString, length: Int, range: NSRange? = nil) {
+    private func highlightInlinePatterns(in text: NSString, length: Int, range: NSRange? = nil, isDark: Bool) {
         let searchRange = range ?? NSRange(location: 0, length: length)
 
         for match in Self.boldRegex.matches(in: text as String, range: searchRange) {
             if match.range(at: 1).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.bold, range: match.range(at: 1))
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.bold(isDark), range: match.range(at: 1))
             }
         }
         for match in Self.italicStarRegex.matches(in: text as String, range: searchRange) {
             if match.range(at: 1).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic, range: match.range(at: 1))
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic(isDark), range: match.range(at: 1))
             }
         }
         for match in Self.italicUnderscoreRegex.matches(in: text as String, range: searchRange) {
             if match.range(at: 1).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic, range: match.range(at: 1))
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic(isDark), range: match.range(at: 1))
             }
         }
         for match in Self.linkRegex.matches(in: text as String, range: searchRange) {
             if match.range(at: 1).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.link, range: match.range(at: 1))
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.link(isDark), range: match.range(at: 1))
             }
         }
         for match in Self.imageRegex.matches(in: text as String, range: searchRange) {
             if match.range(at: 1).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.image, range: match.range(at: 1))
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.image(isDark), range: match.range(at: 1))
             }
         }
         for match in Self.strikeRegex.matches(in: text as String, range: searchRange) {
             if match.range(at: 1).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.strike, range: match.range(at: 1))
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.strike(isDark), range: match.range(at: 1))
             }
         }
     }
