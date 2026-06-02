@@ -5,6 +5,10 @@ import AppKit
 final class LineNumberSideView: NSView {
     weak var textView: NSTextView?
 
+    var isDark: Bool = false {
+        didSet { needsDisplay = true }
+    }
+
     private let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
     private let textColor = NSColor.secondaryLabelColor
 
@@ -58,20 +62,18 @@ final class LineNumberSideView: NSView {
     override var isFlipped: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
+        notesBackgroundColor(isDark: isDark).setFill()
+        bounds.fill()
+
         guard let textView = textView,
               let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer else { return }
 
+        layoutManager.ensureLayout(for: textContainer)
         let visibleRect = textView.visibleRect
         let textContent = textView.string as NSString
         let textLength = textContent.length
         guard textLength > 0 else { return }
-
-        let visibleGlyphRange = layoutManager.glyphRange(
-            forBoundingRectWithoutAdditionalLayout: visibleRect,
-            in: textContainer
-        )
-        guard visibleGlyphRange.length > 0 else { return }
 
         let extendedRect = NSRect(
             x: visibleRect.minX,
@@ -80,7 +82,7 @@ final class LineNumberSideView: NSView {
             height: visibleRect.height + 200
         )
         let extGlyphRange = layoutManager.glyphRange(
-            forBoundingRectWithoutAdditionalLayout: extendedRect,
+            forBoundingRect: extendedRect,
             in: textContainer
         )
         guard extGlyphRange.length > 0 else { return }
@@ -129,14 +131,17 @@ final class LineNumberSideView: NSView {
                 forCharacterRange: lineRange,
                 actualCharacterRange: nil
             )
-            let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            let fragRect = layoutManager.lineFragmentRect(
+                forGlyphAt: glyphRange.location,
+                effectiveRange: nil
+            )
 
-            if glyphRect.minY > visibleRect.maxY { break }
+            if fragRect.minY > visibleRect.maxY { break }
 
-            if glyphRect.maxY >= visibleRect.minY && glyphRect.minY <= visibleRect.maxY {
+            if fragRect.maxY >= visibleRect.minY && fragRect.minY <= visibleRect.maxY {
                 let lineStr = "\(lineIndex)"
-                let localY = glyphRect.minY - visibleRect.minY
-                    + (glyphRect.height - font.pointSize) / 2
+                let localY = fragRect.minY - visibleRect.minY
+                    + (fragRect.height - font.pointSize) / 2
                 let labelRect = NSRect(
                     x: 0, y: localY,
                     width: viewWidth - 4,
@@ -150,3 +155,5 @@ final class LineNumberSideView: NSView {
         }
     }
 }
+
+

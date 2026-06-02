@@ -20,7 +20,6 @@ enum FileService {
         let fm = FileManager.default
         let name = url.lastPathComponent
         var root = FileTreeItem(url: url, name: name, isDirectory: true, parentID: nil)
-        var children: [FileTreeItem] = []
 
         guard let enumerator = fm.enumerator(
             at: url,
@@ -35,7 +34,7 @@ enum FileService {
 
         for case let fileURL as URL in enumerator {
             let parentURL = fileURL.deletingLastPathComponent()
-            guard let parentItem = dirCache[parentURL] else { continue }
+            guard dirCache[parentURL] != nil else { continue }
 
             let itemName = fileURL.lastPathComponent
 
@@ -47,36 +46,39 @@ enum FileService {
                     url: fileURL,
                     name: itemName,
                     isDirectory: true,
-                    parentID: parentItem.id,
+                    parentID: dirCache[parentURL]?.id,
                     children: []
                 )
                 dirCache[fileURL] = dirItem
-
-                if parentItem.url == url {
-                    children.append(dirItem)
-                } else if let idx = children.firstIndex(where: { $0.url == parentItem.url }) {
-                    children[idx].children?.append(dirItem)
-                }
+                appendToTree(root: &root, item: dirItem, parentURL: parentURL)
             } else if fileURL.pathExtension.lowercased() == "md" {
                 let fileItem = FileTreeItem(
                     url: fileURL,
                     name: itemName,
                     isDirectory: false,
-                    parentID: parentItem.id,
+                    parentID: dirCache[parentURL]?.id,
                     children: nil
                 )
-                if parentItem.url == url {
-                    children.append(fileItem)
-                } else {
-                    if let idx = children.firstIndex(where: { $0.url == parentItem.url }) {
-                        children[idx].children?.append(fileItem)
-                    }
-                }
+                appendToTree(root: &root, item: fileItem, parentURL: parentURL)
             }
         }
 
-        root.children = children
         return root
+    }
+
+    private static func appendToTree(root: inout FileTreeItem, item: FileTreeItem, parentURL: URL) {
+        if root.url == parentURL {
+            root.children?.append(item)
+            return
+        }
+        guard var children = root.children else { return }
+        for i in children.indices {
+            if parentURL.path.hasPrefix(children[i].url.path + "/") || children[i].url == parentURL {
+                appendToTree(root: &children[i], item: item, parentURL: parentURL)
+                root.children = children
+                return
+            }
+        }
     }
 
     static func ensureAssetsDirectory(for mdFileURL: URL) throws -> URL {

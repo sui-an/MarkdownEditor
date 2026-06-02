@@ -38,7 +38,7 @@ struct ContentView: View {
         switch themeMode {
         case "light": return .light
         case "dark": return .dark
-        default: return UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark" ? .dark : .light
+        default: return nil
         }
     }
 

@@ -66,7 +66,7 @@ final class SearchState {
         guard let range = currentMatchRange, let textView else { return }
         textView.textStorage?.replaceCharacters(in: range, with: replacement)
         matches = findMatches(in: textView.string, for: query)
-        currentMatchIndex = matches.isEmpty ? 0 : 0
+        currentMatchIndex = matches.isEmpty ? 0 : min(currentMatchIndex, matches.count - 1)
     }
 
     func replaceAll(textView: NSTextView?) {
@@ -138,7 +138,7 @@ final class SearchState {
             return
         }
         matches = findMatches(in: text, for: query)
-        currentMatchIndex = matches.isEmpty ? 0 : 0
+        currentMatchIndex = matches.isEmpty ? 0 : min(currentMatchIndex, matches.count - 1)
         applyHighlights(textView: effectiveTV)
     }
 

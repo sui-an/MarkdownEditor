@@ -69,6 +69,11 @@ final class AppState {
     /// Active outline-parsing work item. Cancelled on new keystroke.
     private var pendingOutlineWork: DispatchWorkItem?
 
+    /// Separate monotonically increasing counter for outline generation.
+    /// Using the same generation counter as HTML would let stale outline
+    /// results overwrite fresh ones (since outline doesn't increment it).
+    private var outlineGeneration: Int64 = 0
+
     /// Content hash of the last cached version for a given URL. Avoids re-parsing
     /// when content hasn't actually changed (e.g. switching tabs).
     private var cachedContentHash: [URL: String] = [:]
@@ -270,6 +275,9 @@ final class AppState {
                 return
             }
             // HTML cache miss — content ready, generate on background
+            lastSavedContent = cachedContent
+            isFileDirty = false
+            isLoadingFile = false
             currentFileContent = cachedContent
             startAsyncHTMLGeneration(content: cachedContent, url: url, token: token, cacheKey: cacheKey)
             return
@@ -390,12 +398,12 @@ final class AppState {
     // MARK: - Outline
 
     private func refreshOutline(_ content: String) {
-        let token = generation
+        let token = OSAtomicIncrement64(&outlineGeneration)
         pendingOutlineWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             let headings = HeadingParser.parse(content)
             DispatchQueue.main.async {
-                guard let self, token == self.generation else { return }
+                guard let self, token == self.outlineGeneration else { return }
                 self.outlineHeadings = headings
             }
         }
@@ -503,7 +511,7 @@ final class AppState {
         let folderURL = rootFolders[idx].url
 
         for url in urls {
-            if !url.path.hasPrefix(folderURL.path) { continue }
+            if !url.path.hasPrefix(folderURL.path + "/") && url.path != folderURL.path { continue }
             let ext = url.pathExtension.lowercased()
 
             if ext == "md" {
@@ -560,10 +568,25 @@ final class AppState {
 
         let name = url.lastPathComponent
         let newFile = FileTreeItem(url: url, name: name, isDirectory: false, parentID: rootFolderID)
-        rootFolders[idx].children?.append(newFile)
 
-        let all = rootFolders[idx].allMarkdownFiles
-        rootFolders[idx].children = all.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        insertInTree(root: &rootFolders[idx], item: newFile, url: url)
+    }
+
+    private func insertInTree(root: inout FileTreeItem, item: FileTreeItem, url: URL) {
+        let parentURL = url.deletingLastPathComponent()
+        if root.url == parentURL {
+            root.children?.append(item)
+            root.children?.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            return
+        }
+        guard var children = root.children else { return }
+        for i in children.indices {
+            if url.path.hasPrefix(children[i].url.path + "/") {
+                insertInTree(root: &children[i], item: item, url: url)
+                root.children = children
+                return
+            }
+        }
     }
 
     /// Break observation chains before deinit to prevent SwiftUI StoredLocation

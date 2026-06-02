@@ -5,9 +5,19 @@ enum HeadingParser {
     static func parse(_ markdown: String) -> [HeadingItem] {
         let lines = markdown.components(separatedBy: .newlines)
         var flat: [HeadingItem] = []
+        var inCodeBlock = false
 
         for (lineIndex, line) in lines.enumerated() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            // Toggle fenced code block state (``` or ~~~)
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                inCodeBlock.toggle()
+                continue
+            }
+
+            guard !inCodeBlock else { continue }
+
             guard trimmed.hasPrefix("#") else { continue }
             let level = trimmed.prefix(while: { $0 == "#" }).count
             guard level >= 1 && level <= 6 else { continue }

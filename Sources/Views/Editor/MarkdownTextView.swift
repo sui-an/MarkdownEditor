@@ -137,6 +137,7 @@ final class EditorScrollView: NSScrollView {
             var bounds = contentView.bounds
             bounds.origin.x = pendingRestoreOffset
             contentView.bounds = bounds
+            pendingRestoreOffset = 0
         }
     }
 
@@ -175,9 +176,17 @@ final class EditorScrollView: NSScrollView {
                     contentView.bounds = bounds
                 }
                 pendingRestoreOffset = savedOffset
-            }
         }
     }
+}
+}
+
+// MARK: - Notes-style background color
+
+func notesBackgroundColor(isDark: Bool) -> NSColor {
+    isDark
+        ? NSColor(calibratedRed: 0.11, green: 0.11, blue: 0.13, alpha: 1.0)
+        : NSColor(calibratedWhite: 1.0, alpha: 1.0)
 }
 
 // MARK: - Wrapper view: line numbers (left) + scroll view (right)
@@ -264,15 +273,18 @@ struct MarkdownTextView: NSViewRepresentable {
         Coordinator(self)
     }
 
+    func dismantleNSView(_ wrapper: EditorWrapperView, coordinator: Coordinator) {
+        coordinator.editorWrapper = nil
+    }
+
     func makeNSView(context: Context) -> EditorWrapperView {
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
-        let bg = NSColor.controlBackgroundColor.withAlphaComponent(1.0)
         scrollView.drawsBackground = true
-        scrollView.backgroundColor = bg
+        scrollView.backgroundColor = notesBackgroundColor(isDark: ThemeManager.isDark(for: themeMode))
         scrollView.verticalScrollElasticity = .none
         scrollView.horizontalScrollElasticity = .none
 
@@ -298,10 +310,8 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.isRichText = true
         textView.usesFontPanel = false
         textView.textColor = NSColor.textColor
-        // Don't draw the NSTextView background ourselves — let the scroll
-        // view's dynamic backgroundColor handle it. This ensures the bg
-        // properly adapts to light/dark appearance changes.
-        textView.drawsBackground = false
+        textView.drawsBackground = true
+        textView.backgroundColor = notesBackgroundColor(isDark: ThemeManager.isDark(for: themeMode))
         textView.isEditable = true
         textView.isSelectable = true
         textView.enabledTextCheckingTypes = 0
@@ -334,9 +344,11 @@ struct MarkdownTextView: NSViewRepresentable {
         context.coordinator.textView = textView
         scrollView.documentView = textView
 
-        textView.textContainerInset = NSSize(width: 4, height: 12)
+        textView.textContainerInset = NSSize(width: 0, height: 12)
 
-        return EditorWrapperView(textView: textView, scrollView: scrollView)
+        let wrapper = EditorWrapperView(textView: textView, scrollView: scrollView)
+        context.coordinator.editorWrapper = wrapper
+        return wrapper
     }
 
     func updateNSView(_ wrapper: EditorWrapperView, context: Context) {
@@ -351,12 +363,13 @@ struct MarkdownTextView: NSViewRepresentable {
 
         if coordinator.lastThemeMode != themeMode {
             coordinator.lastThemeMode = themeMode
-            scrollView.backgroundColor = isDark
-                ? NSColor(calibratedRed: 0.12, green: 0.12, blue: 0.14, alpha: 1.0)
-                : NSColor(calibratedWhite: 0.98, alpha: 1.0)
+            scrollView.backgroundColor = notesBackgroundColor(isDark: isDark)
+            textView.drawsBackground = true
+            textView.backgroundColor = notesBackgroundColor(isDark: isDark)
             textView.insertionPointColor = isDark
                 ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
                 : NSColor(calibratedWhite: 0.08, alpha: 1.0)
+            wrapper.lineNumberView.isDark = isDark
             wrapper.lineNumberView.needsDisplay = true
             scrollView.needsDisplay = true
             textView.needsDisplay = true
@@ -402,6 +415,7 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
         context.coordinator.lastFileURL = currentFileURL
+        wrapper.lineNumberView.needsDisplay = true
     }
 
     // MARK: - Coordinator
@@ -409,6 +423,7 @@ struct MarkdownTextView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: MarkdownTextView
         weak var textView: NSTextView?
+        weak var editorWrapper: EditorWrapperView?
         var suppressTextDidChange = false
         /// Tracks the last opened file URL so we can detect document switches.
         var lastFileURL: URL?
@@ -442,18 +457,19 @@ struct MarkdownTextView: NSViewRepresentable {
             ) { [weak self] notification in
                 guard let self,
                       let textView = self.textView,
-                      let wrapper = textView.superview?.superview?.superview as? EditorWrapperView else { return }
+                       let wrapper = self.editorWrapper else { return }
                 let scrollView = wrapper.scrollView
                 let isDark = (notification.userInfo?["isDark"] as? Bool) ?? false
-                scrollView.backgroundColor = isDark
-                    ? NSColor(calibratedRed: 0.12, green: 0.12, blue: 0.14, alpha: 1.0)
-                    : NSColor(calibratedWhite: 0.98, alpha: 1.0)
+                scrollView.backgroundColor = notesBackgroundColor(isDark: isDark)
+                textView.drawsBackground = true
+                textView.backgroundColor = notesBackgroundColor(isDark: isDark)
                 textView.textColor = isDark
                     ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
                     : NSColor(calibratedWhite: 0.08, alpha: 1.0)
                 textView.insertionPointColor = isDark
                     ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
                     : NSColor(calibratedWhite: 0.08, alpha: 1.0)
+                wrapper.lineNumberView.isDark = isDark
                 wrapper.lineNumberView.needsDisplay = true
                 scrollView.needsDisplay = true
                 textView.needsDisplay = true
