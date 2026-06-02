@@ -274,7 +274,7 @@ bash build.sh
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
-|---|---|---|
+|----------|--------|
 | `Cmd+O` | Open a `.md` file |
 | `Cmd+S` | Save current file |
 | `Cmd+F` | Open search panel |
