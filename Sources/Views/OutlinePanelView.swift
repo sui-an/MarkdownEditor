@@ -42,15 +42,12 @@ final class OutlinePanelWindow: NSWindow {
         titleVisibility = .hidden
         isMovableByWindowBackground = true
         contentView = hosting
-        level = .normal
-        collectionBehavior = [.transient, .ignoresCycle]
-        // Stay above the app's main window, not other apps
+        collectionBehavior = [.ignoresCycle]
         if let appWindow {
             appWindow.addChildWindow(self, ordered: .above)
         }
-        // Keep the window alive after close so re-show via makeKeyAndOrderFront works.
         isReleasedWhenClosed = false
-        makeKeyAndOrderFront(nil)
+        orderFront(nil)
     }
 
     func updateHeadings(_ headings: [HeadingItem]) {

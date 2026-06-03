@@ -14,54 +14,277 @@ extension FocusedValues {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// Called by NSApplication when files are opened via Finder (Open With,
-    /// drag to dock icon, double-click file, etc.).
-    func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls {
-            AppState.shared.openFile(url: url)
+// MARK: - Window Creation
+
+/// Creates all app windows via NSWindow + NSHostingController, bypassing
+/// SwiftUI openWindow (which has a known double-window bug on macOS 14.0-14.3).
+/// All windows share a single Dock icon and each gets an independent SwiftUI
+/// rendering context, so @Observable AppState is properly isolated.
+final class WindowManager: NSObject {
+    static let shared = WindowManager()
+    /// The set of windows managed by WindowManager (exposed for cleanup).
+    private(set) var windows: Set<NSWindow> = []
+    /// Strong references to per-window AppStates.  Without this, AppState has
+    /// no strong reference outside SwiftUI's internal observation system, so
+    /// AppDelegate.focusedAppState (weak var) can silently become nil, causing
+    /// menu commands and performKeyEquivalent handlers to do nothing.
+    private var appStates: [NSWindow: AppState] = [:]
+
+    func createWindow() {
+        print("[WindowManager] createWindow — total windows: \(windows.count + 1)")
+        // Create a dedicated AppState for this window to guarantee isolation.
+        // SwiftUI @State + @Observable can share storage across NSHostingController
+        // instances on macOS 14; passing the instance explicitly avoids that.
+        let appState = AppState()
+        let contentView = ContentView(appState: appState)
+        let controller = NSHostingController(rootView: contentView)
+        let window = NSWindow(contentViewController: controller)
+        window.title = "MarkdownEditor"
+        window.setContentSize(NSSize(width: 1200, height: 800))
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        // Strongly associate AppState with window so windowDidBecomeKey can
+        // find it safely and focusedAppState (weak) stays non-nil.
+        objc_setAssociatedObject(window, &AppDelegate.focusedStateHandle, appState, .OBJC_ASSOCIATION_RETAIN)
+        if let delegate = NSApp.delegate as? AppDelegate {
+            delegate.focusedAppState = appState
         }
-        // Wait for the SwiftUI window to be created before activating.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            NSApp.activate(ignoringOtherApps: true)
-            if let window = NSApp.windows.first {
-                window.makeKeyAndOrderFront(nil)
-                window.orderFrontRegardless()
+        windows.insert(window)
+        appStates[window] = appState
+        window.makeKeyAndOrderFront(nil)
+    }
+}
+
+extension WindowManager: NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        appStates.removeValue(forKey: window)
+        windows.remove(window)
+    }
+}
+
+// MARK: - File Coordination
+
+private let sessionWindowCreationDelay: TimeInterval = 0.15
+
+/// Holds pending URLs from Finder "Open With" until a window claims them.
+/// Uses a batch counter to prevent duplicate window creation when macOS
+/// delivers application(_:open:) multiple times for the same event, while
+/// still allowing a new window for a genuinely new open event.
+final class FileOpenCoordinator {
+    static let shared = FileOpenCoordinator()
+    private var pendingURLs: [URL] = []
+    private var currentBatch = 0
+    private let lock = NSLock()
+
+    /// Exposed for diagnostic logging only
+    var pendingCount: Int { pendingURLs.count }
+    var currentBatchValue: Int { currentBatch }
+
+    func addFiles(_ urls: [URL]) -> Bool {
+        lock.withLock {
+            pendingURLs.append(contentsOf: urls)
+            if currentBatch != 0 { return false }
+            currentBatch = 1
+            return true
+        }
+    }
+
+    func claimFiles() -> [URL] {
+        lock.withLock {
+            let files = pendingURLs
+            pendingURLs.removeAll()
+            currentBatch = 0
+            return files
+        }
+    }
+}
+
+/// Distributes session-restore file groups across newly created windows.
+final class SessionRestoreCoordinator {
+    static let shared = SessionRestoreCoordinator()
+    private var windowFileGroups: [[URL]] = []
+    private var nextIndex = 0
+
+    func setWindows(_ groups: [[URL]]) {
+        windowFileGroups = groups
+        nextIndex = 0
+    }
+
+    func claimNextFiles() -> [URL] {
+        guard nextIndex < windowFileGroups.count else { return [] }
+        let files = windowFileGroups[nextIndex]
+        nextIndex += 1
+        return files
+    }
+
+    /// Called after all session windows have been created to prevent stale
+    /// file groups from being claimed by user-initiated windows.
+    func clear() {
+        windowFileGroups = []
+        nextIndex = 0
+    }
+}
+
+/// Tracks all open windows' file lists for session persistence.
+final class WindowSessionCoordinator {
+    static let shared = WindowSessionCoordinator()
+    private var windows: [UUID: [URL]] = [:]
+
+    func register(files: [URL]) -> UUID {
+        let id = UUID()
+        windows[id] = files
+        return id
+    }
+
+    func update(id: UUID, files: [URL]) {
+        windows[id] = files
+    }
+
+    func unregister(_ id: UUID) {
+        windows.removeValue(forKey: id)
+        persist()
+    }
+
+    private func persist() {
+        SessionRestoreService.saveWindows(Array(windows.values))
+    }
+}
+
+// MARK: - App Delegate
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    var didFinishLaunching = false
+    /// Tracks the focused window's AppState for menu commands (replaces
+    /// @FocusedValue which doesn't work with NSWindow-created views).
+    weak var focusedAppState: AppState?
+    private var sessionRestoreWork: [DispatchWorkItem] = []
+    static var focusedStateHandle: UInt8 = 0
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        print("[AppDelegate] open: \(urls.map { $0.lastPathComponent })")
+        cancelSessionRestore()
+        SessionRestoreCoordinator.shared.clear()
+
+        if didFinishLaunching {
+            let shouldCreate = FileOpenCoordinator.shared.addFiles(urls)
+            print("[AppDelegate] addFiles returned \(shouldCreate)")
+            if shouldCreate {
+                WindowManager.shared.createWindow()
             }
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            _ = FileOpenCoordinator.shared.addFiles(urls)
+            print("[AppDelegate] stored files before finishLaunching")
         }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Pre-cache JS resources on background queue so first WKWebView
-        // creation doesn't read 3.2MB mermaid.min.js on the main thread.
+        // Track which window is key so menu commands always target the
+        // focused AppState.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidBecomeKey(_:)),
+            name: NSWindow.didBecomeKeyNotification,
+            object: nil
+        )
+
+        didFinishLaunching = true
         DispatchQueue.global(qos: .utility).async {
             WebViewCache.preloadScripts()
         }
 
-        let urls = SessionRestoreService.restoreOpenedFiles()
-        if !urls.isEmpty {
-            DispatchQueue.main.async {
-                for url in urls {
-                    AppState.shared.openFile(url: url)
-                }
+        // Close the WindowGroup ghost window (invisible bootstrap).
+        for w in NSApp.windows {
+            if !WindowManager.shared.windows.contains(w) {
+                w.close()
             }
+        }
+
+        // Create all real windows through WindowManager.
+        let sessionWindows = SessionRestoreService.restoreWindows()
+        if !sessionWindows.isEmpty {
+            SessionRestoreCoordinator.shared.setWindows(sessionWindows)
+            sessionRestoreWork = []
+            for i in 0..<sessionWindows.count {
+                let work = DispatchWorkItem {
+                    WindowManager.shared.createWindow()
+                }
+                sessionRestoreWork.append(work)
+                DispatchQueue.main.asyncAfter(
+                    deadline: .now() + Double(i) * sessionWindowCreationDelay,
+                    execute: work
+                )
+            }
+        } else {
+            WindowManager.shared.createWindow()
         }
     }
 
+    @objc private func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        if let state = objc_getAssociatedObject(window, &AppDelegate.focusedStateHandle) as? AppState {
+            focusedAppState = state
+        }
+    }
+
+    private func cancelSessionRestore() {
+        for work in sessionRestoreWork { work.cancel() }
+        sessionRestoreWork.removeAll()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        // Dock → Quit: the app truly terminates, so clear all saved files.
-        // The user wants a fresh start next time.
         SessionRestoreService.clearOpenedFiles()
+    }
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu(title: "Dock")
+        let item = NSMenuItem(title: "New Window", action: #selector(newWindowFromDock), keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func newWindowFromDock() {
+        WindowManager.shared.createWindow()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            let urls = SessionRestoreService.restoreOpenedFiles()
-            for url in urls {
-                AppState.shared.openFile(url: url)
+            let windows = SessionRestoreService.restoreWindows()
+            if !windows.isEmpty {
+                SessionRestoreCoordinator.shared.setWindows(windows)
+                sessionRestoreWork = []
+                for i in 0..<windows.count {
+                    let work = DispatchWorkItem {
+                        WindowManager.shared.createWindow()
+                    }
+                    sessionRestoreWork.append(work)
+                    DispatchQueue.main.asyncAfter(
+                        deadline: .now() + Double(i) * sessionWindowCreationDelay,
+                        execute: work
+                    )
+                }
+            } else {
+                // No session — open a single fresh window
+                WindowManager.shared.createWindow()
             }
         }
         return true
+    }
+}
+
+// MARK: - Window Bootstrap
+
+/// Placeholder for the WindowGroup scene.  Invisible and immediately
+/// closes itself so the real first window (created by WindowManager)
+/// becomes the only visible window.
+private struct WindowBootstrapView: View {
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .hidden()
     }
 }
 
@@ -69,15 +292,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 @main
 struct MarkdownEditorApp: App {
-    @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
-    init() {
-    }
-
     var body: some Scene {
-        WindowGroup(id: "Main") {
-            ContentView()
+        WindowGroup {
+            WindowBootstrapView()
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
@@ -86,7 +305,7 @@ struct MarkdownEditorApp: App {
         .commands {
             CommandGroup(after: .newItem) {
                 Button("New Window") {
-                    openWindow(id: "Main")
+                    WindowManager.shared.createWindow()
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
 
@@ -96,15 +315,18 @@ struct MarkdownEditorApp: App {
                 OpenFolderCommand()
             }
 
-            CommandGroup(after: .saveItem) {
+            CommandGroup(replacing: .saveItem) {
                 SaveCommand()
             }
 
             SidebarCommands()
 
-            // View menu
             CommandGroup(before: .toolbar) {
                 TogglePreviewCommand()
+
+                Divider()
+
+                FontSizeCommands()
 
                 Divider()
 
@@ -116,9 +338,15 @@ struct MarkdownEditorApp: App {
 
 // MARK: - Menu Commands
 
-struct OpenFileCommand: View {
-    @FocusedValue(\.currentAppState) var appState
+private func focusedAppState() -> AppState? {
+    if let window = NSApp.keyWindow,
+       let state = objc_getAssociatedObject(window, &AppDelegate.focusedStateHandle) as? AppState {
+        return state
+    }
+    return (NSApp.delegate as? AppDelegate)?.focusedAppState
+}
 
+struct OpenFileCommand: View {
     var body: some View {
         Button("Open File...") {
             openFileDialog()
@@ -136,7 +364,7 @@ struct OpenFileCommand: View {
         panel.message = "Select a .md file to edit"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let state = appState
+        let state = focusedAppState()
         DispatchQueue.main.async {
             state?.openFile(url: url)
         }
@@ -144,8 +372,6 @@ struct OpenFileCommand: View {
 }
 
 struct OpenFolderCommand: View {
-    @FocusedValue(\.currentAppState) var appState
-
     var body: some View {
         Button("Open Folder...") {
             openFolderDialog()
@@ -161,7 +387,7 @@ struct OpenFolderCommand: View {
         panel.message = "Select a folder to browse its Markdown files"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let state = appState
+        let state = focusedAppState()
         DispatchQueue.main.async {
             state?.openFolder(url: url)
         }
@@ -169,29 +395,46 @@ struct OpenFolderCommand: View {
 }
 
 struct SaveCommand: View {
-    @FocusedValue(\.currentAppState) var appState
-
     var body: some View {
         Button("Save") {
-            appState?.saveCurrentFile()
+            guard let window = NSApp.keyWindow,
+                  let state = objc_getAssociatedObject(window, &AppDelegate.focusedStateHandle) as? AppState
+            else { return }
+            state.saveCurrentFile()
         }
         .keyboardShortcut("s", modifiers: .command)
-        .disabled(appState?.currentFileURL == nil)
     }
 }
 
 struct TogglePreviewCommand: View {
-    @AppStorage("previewOnly") private var previewOnly = true
-
     var body: some View {
-        Button(previewOnly ? "Show Editor" : "Preview Only") {
-            previewOnly.toggle()
+        let state = focusedAppState()
+        Button((state?.previewOnly ?? true) ? "Show Editor" : "Preview Only") {
+            focusedAppState()?.previewOnly.toggle()
         }
         .keyboardShortcut("p", modifiers: [.command, .shift])
     }
 }
 
 // MARK: - Theme
+
+struct FontSizeCommands: View {
+    var body: some View {
+        Button("Larger Text") {
+            focusedAppState()?.changeFontSize(by: 1)
+        }
+        .keyboardShortcut("=", modifiers: .command)
+
+        Button("Smaller Text") {
+            focusedAppState()?.changeFontSize(by: -1)
+        }
+        .keyboardShortcut("-", modifiers: .command)
+
+        Button("Reset Text Size") {
+            focusedAppState()?.resetFontSize()
+        }
+    }
+}
 
 struct ThemePickerCommand: View {
     @AppStorage("themeMode") private var themeMode: String = "system"

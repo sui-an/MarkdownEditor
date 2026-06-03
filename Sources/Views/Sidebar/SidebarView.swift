@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 struct SidebarView: View {
-    @Environment(AppState.self) private var appState
+    let appState: AppState
 
     var body: some View {
         VStack(spacing: 0) {
@@ -72,6 +72,7 @@ struct SidebarView: View {
                 }
             }
             .listStyle(.sidebar)
+            .listRowInsets(EdgeInsets())
         }
         .frame(minWidth: 180)
         .onChange(of: appState.selectedFileID) { _, newValue in

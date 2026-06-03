@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 private func visToInt(_ v: NavigationSplitViewVisibility) -> Int {
     switch v {
@@ -21,18 +22,13 @@ private func intToVis(_ i: Int) -> NavigationSplitViewVisibility {
 }
 
 struct ContentView: View {
-    @State private var appState = AppState.shared
-    @State private var viewRefs = ViewRefs()
-    @AppStorage("previewOnly") private var previewOnly = true
-    @AppStorage("previewContentWidth") private var previewContentWidth = 0
-    @AppStorage("themeMode") private var themeMode: String = "system"
-    @State private var outlinePanel: OutlinePanelWindow?
-    @State private var searchPanel: SearchPanel?
-    @State private var showPreviewSearch = false
-    @State private var themeChangeToken = 0
+    let appState: AppState
 
-    /// Stored in UserDefaults so sidebar visibility survives app restarts.
-    @AppStorage("sidebarVis") private var sidebarVis = 0
+    init(appState: AppState = AppState()) {
+        self.appState = appState
+    }
+
+    @AppStorage("themeMode") private var themeMode: String = "system"
 
     private var preferredColorScheme: ColorScheme? {
         switch themeMode {
@@ -43,7 +39,7 @@ struct ContentView: View {
     }
 
     private var widthIcon: String {
-        switch previewContentWidth {
+        switch appState.previewContentWidth {
         case 1: return "rectangle"
         case 2: return "rectangle.3.group"
         default: return "rectangle.dashed"
@@ -51,7 +47,7 @@ struct ContentView: View {
     }
 
     private var widthHelp: String {
-        switch previewContentWidth {
+        switch appState.previewContentWidth {
         case 1: return "Full Width (⌘W)"
         case 2: return "Normal Width (⌘W)"
         default: return "Wide Width (⌘W)"
@@ -60,40 +56,49 @@ struct ContentView: View {
 
     private var columnVisibility: Binding<NavigationSplitViewVisibility> {
         Binding(
-            get: { intToVis(sidebarVis) },
-            set: { sidebarVis = visToInt($0) }
+            get: { intToVis(appState.sidebarVis) },
+            set: { appState.sidebarVis = visToInt($0) }
         )
     }
 
     var body: some View {
-        let _ = themeChangeToken
+        let _ = appState.themeChangeCount
         ZStack {
             NavigationSplitView(columnVisibility: columnVisibility) {
-                sidebarContent
+                SidebarView(appState: appState)
+                    .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 400)
             } detail: {
                 ResizableHSplitView(
                     minLeftWidth: 200,
                     minRightWidth: 200,
-                    collapsed: previewOnly,
-                    left: editorContent,
-                    right: previewContent
+                    collapsed: appState.previewOnly,
+                    left: EditorContainerView(appState: appState, viewRefs: appState.viewRefs, themeMode: themeMode),
+                    right: PreviewWithFontSizeView(
+                        appState: appState,
+                        themeMode: themeMode,
+                        webViewCache: appState.webViewCache
+                    )
+                    .frame(minWidth: 200)
                 )
             }
-            .navigationSplitViewStyle(.prominentDetail)
+            .navigationSplitViewStyle(.balanced)
             .navigationTitle(windowTitle)
-            .animation(.none, value: sidebarVis)
-            .environment(appState)
+            .animation(.none, value: appState.sidebarVis)
             .focusedSceneValue(\.currentAppState, appState)
             .onAppear {
-                ThemeManager.shared.applyCurrentTheme()
+                onViewAppear()
+            }
+            .onChange(of: appState.openFiles) { _, files in
+                guard let id = appState.windowSessionID else { return }
+                WindowSessionCoordinator.shared.update(
+                    id: id,
+                    files: files.map { $0.url }
+                )
             }
             .onChange(of: themeMode) { _, _ in
                 ThemeManager.shared.applyCurrentTheme()
             }
-            .onReceive(NotificationCenter.default.publisher(for: .themeDidChange)) { _ in
-                themeChangeToken &+= 1
-            }
-            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            .onDrop(of: [UTType.fileURL], isTargeted: .constant(false)) { providers in
                 for provider in providers {
                     _ = provider.loadObject(ofClass: NSURL.self) { item, _ in
                         if let nsurl = item as? NSURL {
@@ -106,27 +111,41 @@ struct ContentView: View {
                 return true
             }
             .onDisappear {
+                if let id = appState.windowSessionID {
+                    WindowSessionCoordinator.shared.unregister(id)
+                }
                 appState.cleanup()
             }
             .preferredColorScheme(preferredColorScheme)
             .onChange(of: appState.outlineHeadings) { _, headings in
-                outlinePanel?.updateHeadings(headings)
+                appState.outlinePanel?.updateHeadings(headings)
             }
-            .overlay(alignment: .top) {
-                if previewOnly && showPreviewSearch {
+            .overlay(alignment: Alignment.top) {
+                if appState.previewOnly && appState.showPreviewSearch {
                     PreviewSearchOverlay(
-                        webView: { [viewRefs] in viewRefs.webView },
-                        viewRefs: viewRefs,
+                        webView: { [appState] in appState.viewRefs.webView },
+                        viewRefs: appState.viewRefs,
                         onClose: {
-                            showPreviewSearch = false
+                            appState.showPreviewSearch = false
                         }
                     )
                     .transition(.move(edge: .top).combined(with: .opacity))
-                    .animation(.easeInOut(duration: 0.15), value: showPreviewSearch)
+                    .animation(.easeInOut(duration: 0.15), value: appState.showPreviewSearch)
                     .zIndex(100)
                 }
             }
             .toolbar(id: "main") {
+                ToolbarItem(id: "sidebarToggle", placement: .navigation) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            appState.sidebarVis = appState.sidebarVis == 3 ? 1 : 3
+                        }
+                    } label: {
+                        Image(systemName: "sidebar.left")
+                    }
+                    .help("Toggle Sidebar (⌘⌥S)")
+                }
+
                 ToolbarItem(id: "newNote", placement: .navigation) {
                     Button {
                         appState.createNewNote()
@@ -138,10 +157,10 @@ struct ContentView: View {
                     .help("New Note (⌘N)")
                 }
 
-                if previewOnly {
+                if appState.previewOnly {
                     ToolbarItem(id: "contentWidthToggle", placement: .primaryAction) {
                         Button {
-                            previewContentWidth = (previewContentWidth + 1) % 3
+                            appState.previewContentWidth = (appState.previewContentWidth + 1) % 3
                         } label: {
                             Image(systemName: widthIcon)
                         }
@@ -167,18 +186,18 @@ struct ContentView: View {
                     Button {
                         togglePreviewOnly()
                     } label: {
-                        Image(systemName: previewOnly
+                        Image(systemName: appState.previewOnly
                               ? "doc.richtext"
                               : "doc.plaintext")
                     }
-                    .help(previewOnly ? "Show Editor (⇧⌘P)" : "Preview Only (⇧⌘P)")
+                    .help(appState.previewOnly ? "Show Editor (⇧⌘P)" : "Preview Only (⇧⌘P)")
                 }
             }
 
             // Hidden keyboard shortcut handlers
             Button("") {
                 withAnimation(.easeInOut(duration: 0.22)) {
-                    sidebarVis = sidebarVis == 3 ? 1 : 3
+                    appState.sidebarVis = appState.sidebarVis == 3 ? 1 : 3
                 }
             }
                 .keyboardShortcut("s", modifiers: [.command, .option])
@@ -197,7 +216,7 @@ struct ContentView: View {
                     .opacity(0)
                     .allowsHitTesting(false)
             }
-            if previewOnly {
+            if appState.previewOnly {
                 Button("") { toggleOutline() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
                     .frame(width: 0, height: 0)
@@ -207,29 +226,78 @@ struct ContentView: View {
         }
     }
 
-    private func toggleSearch() {
-        if previewOnly {
-            showPreviewSearch = true
+    private static let appearQueue = DispatchQueue(label: "appear-counter")
+    private static var appearCounter = 0
+
+    private func onViewAppear() {
+        let seq = Self.appearQueue.sync { Self.appearCounter += 1; return Self.appearCounter }
+        let marker = "======================================================================"
+        print("[\(seq)] \(marker)")
+        print("[\(seq)] >>> onAppear  appState=\(appState.instanceID)")
+        print("[\(seq)]     keyWindow.title='\(NSApp.keyWindow?.title ?? "?")'")
+        print("[\(seq)]     FileOpenCoordinator.pending=\(FileOpenCoordinator.shared.pendingCount) batch=\(FileOpenCoordinator.shared.currentBatchValue)")
+
+        ThemeManager.shared.applyCurrentTheme()
+        if let appDelegate = NSApp.delegate as? AppDelegate,
+           let window = NSApp.keyWindow {
+            appDelegate.focusedAppState = appState
+            objc_setAssociatedObject(
+                window,
+                &AppDelegate.focusedStateHandle,
+                appState,
+                .OBJC_ASSOCIATION_RETAIN
+            )
+        }
+
+        let pending = FileOpenCoordinator.shared.claimFiles()
+        let pendingNames = pending.map { $0.lastPathComponent }.joined(separator: ", ")
+        print("[\(seq)]     claimFiles -> [\(pendingNames)]  (→ AppState \(appState.instanceID))")
+
+        if !pending.isEmpty {
+            for url in pending {
+                appState.openFile(url: url)
+            }
         } else {
-            if searchPanel?.isVisible == true {
-                searchPanel?.close()
-                searchPanel = nil
+            let restored = SessionRestoreCoordinator.shared.claimNextFiles()
+            let restoredNames = restored.map { $0.lastPathComponent }.joined(separator: ", ")
+            print("[\(seq)]     sessionRestore -> [\(restoredNames)]  (→ AppState \(appState.instanceID))")
+            for url in restored {
+                appState.openFile(url: url)
+            }
+        }
+
+        appState.windowSessionID = WindowSessionCoordinator.shared.register(
+            files: appState.openFiles.map { $0.url }
+        )
+
+        print("[\(seq)]     final files: \(appState.openFiles.map { $0.url.lastPathComponent })")
+        print("[\(seq)] <<< onAppear END")
+        print("[\(seq)] \(marker)")
+    }
+
+    private func toggleSearch() {
+        if appState.previewOnly {
+            appState.showPreviewSearch = true
+        } else {
+            if appState.searchPanel?.isVisible == true {
+                appState.searchPanel?.close()
+                appState.searchPanel = nil
             } else {
-                searchPanel?.close()
+                appState.searchPanel?.close()
                 let panel = SearchPanel(
                     searchState: appState.searchState,
-                    textView: { [viewRefs] in viewRefs.textView },
-                    webView: { [viewRefs] in viewRefs.webView },
-                    viewRefs: viewRefs
+                    textView: { [appState] in appState.viewRefs.textView },
+                    webView: { [appState] in appState.viewRefs.webView },
+                    viewRefs: appState.viewRefs
                 )
-                searchPanel = panel
+                appState.searchPanel = panel
             }
         }
     }
 
     private func toggleOutline() {
         guard appState.selectedFileID != nil else { return }
-        if let panel = outlinePanel, panel.isVisible {
+        if let panel = appState.outlinePanel, panel.isVisible {
             panel.orderOut(nil)
             appState.isOutlineVisible = false
         } else {
@@ -239,39 +307,60 @@ struct ContentView: View {
     }
 
     private func openOutlinePanel() {
-        if let existing = outlinePanel {
+        let mainWindow = NSApp.keyWindow
+        if let existing = appState.outlinePanel {
             existing.updateHeadings(appState.outlineHeadings)
-            existing.makeKeyAndOrderFront(nil)
+            // Re-establish child window relationship so the panel stays
+            // above the main window even after clicking the editor/preview.
+            if let mainWindow {
+                mainWindow.addChildWindow(existing, ordered: .above)
+            }
+            existing.orderFront(nil)
             return
         }
         let panel = OutlinePanelWindow(
             headings: appState.outlineHeadings,
-            textView: { [viewRefs] in viewRefs.textView },
-            webView: { [viewRefs] in viewRefs.webView },
+            textView: { [appState] in appState.viewRefs.textView },
+            webView: { [appState] in appState.viewRefs.webView },
             onClose: { [weak appState] in appState?.isOutlineVisible = false }
         )
-        outlinePanel = panel
-        panel.makeKeyAndOrderFront(nil)
+        appState.outlinePanel = panel
+        if let mainWindow {
+            mainWindow.addChildWindow(panel, ordered: .above)
+        }
+        panel.orderFront(nil)
     }
 
     private func togglePreviewOnly() {
-        previewOnly.toggle()
+        appState.previewOnly.toggle()
     }
 
     private func toggleContentWidth() {
-        previewContentWidth = (previewContentWidth + 1) % 3
+        appState.previewContentWidth = (appState.previewContentWidth + 1) % 3
     }
 
-    private var sidebarContent: some View {
-        SidebarView()
-            .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 400)
+    private var windowTitle: String {
+        if let url = appState.currentFileURL {
+            let base = url.lastPathComponent
+            if appState.isFileDirty && !appState.previewOnly {
+                return "\(base) — Edited"
+            }
+            return base
+        }
+        return "MarkdownEditor"
     }
+}
 
-    private var editorContent: some View {
-        EditorContainerView(viewRefs: viewRefs, themeMode: themeMode)
-    }
+// MARK: - Preview wrapper that isolates fontSize dependency
+//
+// Prevents ContentView.body from re-evaluating on every font-size change
+// (which would diff the entire NavigationSplitView + sidebar unnecessarily).
+private struct PreviewWithFontSizeView: View {
+    let appState: AppState
+    let themeMode: String
+    let webViewCache: WebViewCache
 
-    private var previewContent: some View {
+    var body: some View {
         PreviewWebView(
             html: appState.renderedHTML,
             bodyHTML: appState.renderedBodyHTML,
@@ -279,21 +368,11 @@ struct ContentView: View {
             baseURL: appState.currentFileURL?.deletingLastPathComponent(),
             fileURL: appState.currentFileURL,
             fileID: appState.selectedFileID,
-            viewRefs: viewRefs,
-            previewContentWidth: previewContentWidth,
-            themeMode: themeMode
+            viewRefs: appState.viewRefs,
+            previewContentWidth: appState.previewContentWidth,
+            themeMode: themeMode,
+            fontSize: appState.fontSize,
+            webViewCache: webViewCache
         )
-            .frame(minWidth: 200)
-    }
-
-    private var windowTitle: String {
-        if let url = appState.currentFileURL {
-            let base = url.lastPathComponent
-            if appState.isFileDirty && !previewOnly {
-                return "\(base) — Edited"
-            }
-            return base
-        }
-        return "MarkdownEditor"
     }
 }

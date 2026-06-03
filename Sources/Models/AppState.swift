@@ -18,10 +18,7 @@ private final class CachedHTML {
 
 @Observable
 final class AppState {
-    /// Shared instance used by the AppDelegate when files are opened via Finder.
-    /// ContentView references this same instance via `@State`.
-    static let shared = AppState()
-
+    let instanceID = UUID().uuidString.prefix(8)
     var rootFolders: [FileTreeItem] = []
     var openFiles: [FileTreeItem] = []
     var selectedFileID: UUID?
@@ -37,9 +34,28 @@ final class AppState {
     var outlineHeadings: [HeadingItem] = []
     var isOutlineVisible = false
 
+    /// Per-window preferences (moved from @AppStorage)
+    var previewOnly = true
+    var previewContentWidth = 0
+    var sidebarVis = 0
+
+    /// Per-window state migrated from ContentView's @State to eliminate
+    /// cross-NSHostingController state sharing on macOS 14.
+    let viewRefs = ViewRefs()
+    var fontSize: CGFloat = AppState.loadFontSize()
+    var themeChangeCount = 0
+    var showPreviewSearch = false
+    @ObservationIgnored var outlinePanel: OutlinePanelWindow?
+    @ObservationIgnored var searchPanel: SearchPanel?
+    @ObservationIgnored var windowSessionID: UUID?
+    @ObservationIgnored private var themeObserver: Any?
+
     private var folderWatchers: [UUID: FolderWatcher] = [:]
     private var selectedFileURL: URL?
     private var lastSavedContent: String = ""
+
+    /// Per-window WebView cache (replaces global singleton)
+    let webViewCache = WebViewCache()
 
     // MARK: - In-memory file content cache
 
@@ -90,6 +106,44 @@ final class AppState {
         // all stored properties to be initialized before accessing self.
         searchState = SearchState { "" }
         searchState.setContent { [weak self] in self?.currentFileContent ?? "" }
+
+        themeObserver = NotificationCenter.default.addObserver(
+            forName: .themeDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.themeChangeCount &+= 1
+        }
+    }
+
+    static func loadFontSize() -> CGFloat {
+        let saved = UserDefaults.standard.double(forKey: "editorFontSize")
+        return saved >= 9 ? saved : 13
+    }
+
+    func changeFontSize(by delta: CGFloat) {
+        let newSize = max(9, min(72, fontSize + delta))
+        guard newSize != fontSize else { return }
+        fontSize = newSize
+        UserDefaults.standard.set(newSize, forKey: "editorFontSize")
+        // Update text view font and apply to all existing text immediately
+        if let tv = viewRefs.textView {
+            tv.font = NSFont.systemFont(ofSize: newSize)
+            if let storage = tv.textStorage, storage.length > 0 {
+                storage.addAttribute(.font, value: NSFont.systemFont(ofSize: newSize), range: NSRange(location: 0, length: storage.length))
+            }
+            tv.needsDisplay = true
+        }
+    }
+
+    func resetFontSize() {
+        changeFontSize(by: 13 - fontSize)
+    }
+
+    deinit {
+        if let observer = themeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     // MARK: - New Note
@@ -129,6 +183,8 @@ final class AppState {
     // MARK: - Open File
 
     func openFile(url: URL) {
+        let caller = Thread.callStackSymbols.dropFirst(2).prefix(4).joined(separator: "\n  ")
+        print("[AppState \(instanceID)] openFile: \(url.lastPathComponent)\n  caller:\n  \(caller)")
         guard url.pathExtension.lowercased() == "md" else { return }
 
         if let existing = openFiles.first(where: { $0.url == url }) {
@@ -138,7 +194,6 @@ final class AppState {
 
         let item = FileTreeItem(url: url, name: url.lastPathComponent, isDirectory: false, parentID: nil)
         openFiles.append(item)
-        SessionRestoreService.saveOpenedFiles(openFiles.map { $0.url })
         loadFileContent(url: url, id: item.id)
     }
 
@@ -176,11 +231,10 @@ final class AppState {
             cachedHTML.removeValue(for: item.url)
         }
         openFiles.removeAll { $0.id == id }
-        SessionRestoreService.saveOpenedFiles(openFiles.map { $0.url })
         if selectedFileID == id {
             clearSelection()
         }
-        WebViewCache.shared.remove(for: id)
+        webViewCache.remove(for: id)
     }
 
     // MARK: - Remove Folder
@@ -279,41 +333,45 @@ final class AppState {
             return
         }
 
-        // Cache miss — read file on background, show content as soon as
-        // the file is read, then generate HTML for the preview asynchronously.
+        // Cache miss — read file and generate HTML on background in one pass,
+        // then swap both content + preview together in a single main-thread
+        // dispatch.  This cuts SwiftUI render passes from 3 to 2 (setup → data),
+        // eliminating the intermediate render where the editor shows content
+        // but the preview is blank.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self, token == self.generation else { return }
 
             do {
                 let content = try FileService.readFile(at: url)
+                let (bodyHTML, fullHTML) = MarkdownParser.parseToHTML(content)
 
-                // Cache content regardless of navigation — even if the user
-                // switches away during the read, the next switch is zero-IO.
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    self.cacheFileContent(content, for: url, cacheKey: cacheKey)
-                }
-
-                guard token == self.generation else { return }
-
-                // Show content in the editor immediately — user can start
-                // reading/editing while HTML preview is generated.
                 DispatchQueue.main.async { [weak self] in
                     guard let self, token == self.generation else { return }
-                    self.lastSavedContent = content
-                    self.isFileDirty = false
-                    self.isLoadingFile = false
-                    self.currentFileContent = content
-                }
+                    // Cache for future switches (even if navigation changed
+                    // during this async block, the next switch is zero-IO).
+                    if let _ = fileContents[url] {
+                        // Already cached by a more recent operation
+                    } else {
+                        cacheFileContent(content, for: url, cacheKey: cacheKey)
+                    }
 
-                // Generate HTML on background — preview catches up when done.
-                self.generateAndCacheHTML(content: content, url: url, token: token, cacheKey: cacheKey)
+                    lastSavedContent = content
+                    isFileDirty = false
+                    isLoadingFile = false
+                    currentFileContent = content
+
+                    let cached = CachedHTML(html: fullHTML, bodyHTML: bodyHTML)
+                    htmlCache.setObject(cached, forKey: url as NSURL, cost: fullHTML.utf8.count)
+                    cachedContentHash[url] = cacheKey
+                    cacheRenderedHTML(cached, for: url)
+                    renderedHTML = fullHTML
+                    renderedBodyHTML = bodyHTML
+                }
             } catch {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, token == self.generation else { return }
                     self.isLoadingFile = false
                     self.openFiles.removeAll { $0.id == id }
-                    SessionRestoreService.saveOpenedFiles(self.openFiles.map { $0.url })
                     let alert = NSAlert()
                     alert.messageText = "Cannot Open File"
                     alert.informativeText = error.localizedDescription
@@ -411,12 +469,22 @@ final class AppState {
     // MARK: - Save
 
     func saveCurrentFile() {
-        guard let url = currentFileURL, isFileDirty else { return }
+        guard let url = currentFileURL else { return }
+        // Read clean markdown from the text storage (replaces \u{FFFC}
+        // attachment chars with original markdown syntax).
+        let content: String
+        if let tv = viewRefs.textView, let storage = tv.textStorage {
+            content = MarkdownTextView.Coordinator.buildCleanMarkdown(from: storage)
+        } else {
+            guard isFileDirty else { return }
+            content = currentFileContent
+        }
         do {
-            try FileService.writeFile(currentFileContent, to: url)
-            lastSavedContent = currentFileContent
+            try FileService.writeFile(content, to: url)
+            lastSavedContent = content
             isFileDirty = false
-            // Update saved hash so in-memory cache stays valid
+            // Keep currentFileContent in sync
+            currentFileContent = content
             fileSavedHashes[url] = quickHashForCacheCheck(url: url)
         } catch {
             let alert = NSAlert()
@@ -529,7 +597,7 @@ final class AppState {
         fileSavedHashes.removeValue(forKey: url)
         fileContentAccessOrder.removeAll { $0 == url }
         cachedHTML.removeValue(for: url)
-        WebViewCache.shared.removeWebView(for: url)
+        webViewCache.removeWebView(for: url)
     }
 
     private func removeFileRecursively(from item: inout FileTreeItem, url: URL) {
@@ -579,7 +647,6 @@ final class AppState {
     /// recursive deallocation crashes during view hierarchy teardown.
     /// Call when the owning view disappears or is about to be deallocated.
     func cleanup() {
-        SessionRestoreService.saveOpenedFiles(openFiles.map { $0.url })
         pendingHTMLWork?.cancel()
         pendingHTMLWork = nil
         pendingOutlineWork?.cancel()
@@ -602,6 +669,15 @@ final class AppState {
         isFileDirty = false
         renderedHTML = ""
         renderedBodyHTML = ""
+        outlinePanel?.close()
+        outlinePanel = nil
+        searchPanel?.close()
+        searchPanel = nil
+        windowSessionID = nil
+        if let observer = themeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            themeObserver = nil
+        }
     }
 
     func promptExternalChange(for url: URL) {

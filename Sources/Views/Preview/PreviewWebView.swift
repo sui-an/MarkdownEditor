@@ -8,6 +8,9 @@ final class WebViewState: NSObject, WKNavigationDelegate {
     var needsScrollReset = false
     var lastBodyHTML = ""
     var hasLoadedContent = false
+    /// Non-nil when a font-size change arrived before the page finished loading.
+    /// Applied in webView(_:didFinish:) so we never evaluate JS on an empty page.
+    var pendingFontSize: CGFloat?
     private var scrollerConfigured = false
 
     func configureScrollView(_ webView: WKWebView) {
@@ -31,6 +34,10 @@ final class WebViewState: NSObject, WKNavigationDelegate {
         if (typeof mermaid !== 'undefined') { mermaid.run({ querySelector: '.mermaid' }); }
         if (typeof hljs !== 'undefined') { hljs.highlightAll(); }
         """)
+        if let size = pendingFontSize {
+            injectFontSize(webView, fontSize: size)
+            pendingFontSize = nil
+        }
         if needsScrollReset {
             needsScrollReset = false
             webView.evaluateJavaScript("window.scrollTo(0, 0)")
@@ -52,8 +59,6 @@ final class WebViewState: NSObject, WKNavigationDelegate {
 // MARK: - WebView cache (per-fileID)
 
 final class WebViewCache {
-    static let shared = WebViewCache()
-
     // Pre-cached JS scripts — read from disk once, avoids blocking the main
     // thread on every first-time WKWebView creation (mermaid.min.js is 3.2MB).
     private static let cachedHighlightJS: String? = {
@@ -204,6 +209,8 @@ struct PreviewWebView: NSViewRepresentable {
     var viewRefs: ViewRefs?
     let previewContentWidth: Int
     var themeMode: String = "system"
+    var fontSize: CGFloat = 15
+    let webViewCache: WebViewCache
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -222,13 +229,25 @@ struct PreviewWebView: NSViewRepresentable {
             return
         }
 
-        let (webView, state) = WebViewCache.shared.webView(for: fileID, url: fileURL)
+        let (webView, state) = webViewCache.webView(for: fileID, url: fileURL)
 
         // Theme change — @AppStorage triggers updateNSView directly
         let isDark = ThemeManager.isDark(for: themeMode)
         if context.coordinator.lastAppliedIsDark != isDark {
             context.coordinator.lastAppliedIsDark = isDark
             injectTheme(webView, isDark: isDark)
+        }
+
+        // Font size sync — scale preview body font proportionally to editor font
+        if context.coordinator.lastAppliedFontSize != fontSize {
+            context.coordinator.lastAppliedFontSize = fontSize
+            if state.hasLoadedContent {
+                injectFontSize(webView, fontSize: fontSize)
+            } else {
+                // Defer injection until the page actually finishes loading,
+                // avoiding evaluateJavaScript on an empty WKWebView.
+                state.pendingFontSize = fontSize
+            }
         }
 
         if context.coordinator.currentWebView !== webView {
@@ -295,6 +314,7 @@ struct PreviewWebView: NSViewRepresentable {
         var currentWebView: WKWebView?
         var lastPreviewContentWidth: Int?
         var lastAppliedIsDark: Bool?
+        var lastAppliedFontSize: CGFloat?
         private var themeObserver: Any?
 
         init() {
@@ -383,4 +403,14 @@ private func injectTheme(_ webView: WKWebView, isDark: Bool) {
         el.textContent = ':root { ' + \(escapedCSS) + ' }';
     })();
     """)
+}
+
+/// Injects a CSS `font-size` rule into the preview body, scaled proportionally
+/// from the editor's default (13pt → 15px CSS base).
+private func injectFontSize(_ webView: WKWebView, fontSize: CGFloat) {
+    let scale = fontSize / 13.0
+    let previewSize = Int(15.0 * scale)
+    webView.evaluateJavaScript("""
+        document.body.style.setProperty('font-size', '\(previewSize)px', 'important');
+        """)
 }

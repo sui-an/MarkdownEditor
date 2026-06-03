@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct EditorContainerView: View {
-    @Environment(AppState.self) private var appState
+    let appState: AppState
     var viewRefs: ViewRefs?
     var themeMode: String = "system"
 
@@ -11,7 +11,11 @@ struct EditorContainerView: View {
                 text: Bindable(appState).currentFileContent,
                 currentFileURL: appState.currentFileURL,
                 viewRefs: viewRefs,
-                themeMode: themeMode
+                themeMode: themeMode,
+                fontSize: appState.fontSize,
+                onFontSizeChange: { delta in
+                    appState.changeFontSize(by: delta)
+                }
             )
             .onChange(of: appState.currentFileContent) { _, newValue in
                 appState.updateContent(newValue)

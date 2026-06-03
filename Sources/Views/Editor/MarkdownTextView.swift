@@ -13,17 +13,43 @@ final class MarkdownImageAttachment: NSTextAttachment {
 final class ImageDropTextView: NSTextView {
     var onImageDrop: ((URL) -> Void)?
     var onImagePaste: ((NSImage) -> Void)?
+    /// Retrieves the AppState associated with this text view's window (set via
+    /// objc_setAssociatedObject in WindowManager / ContentView).  More reliable
+    /// than AppDelegate.focusedAppState because it doesn't depend on global
+    /// weak-reference state.
+    private var appState: AppState? {
+        guard let window else { return nil }
+        return objc_getAssociatedObject(window, &AppDelegate.focusedStateHandle) as? AppState
+    }
 
-    /// Pass Cmd+F through to the menu system so SwiftUI's .keyboardShortcut
-    /// (the custom search panel) can handle it, instead of NSTextView's
-    /// built-in find bar consuming the event on first press.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.contains(.command),
-           let chars = event.charactersIgnoringModifiers,
-           chars == "f" {
+        guard event.modifierFlags.contains(.command),
+              let chars = event.charactersIgnoringModifiers else {
+            return super.performKeyEquivalent(with: event)
+        }
+        if chars == "f" {
             return false
         }
+        if chars == "s" {
+            appState?.saveCurrentFile()
+            return true
+        }
+        if chars == "=" {
+            appState?.changeFontSize(by: 1)
+            return true
+        }
+        if chars == "-" {
+            appState?.changeFontSize(by: -1)
+            return true
+        }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// Handle File → Save (system menu item).  The system Save at .saveItem
+    /// sends saveDocument: to the first responder; our override makes it save
+    /// the current file instead of being a no-op (since we don't use NSDocument).
+    @objc func saveDocument(_ sender: Any?) {
+        appState?.saveCurrentFile()
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -264,6 +290,8 @@ struct MarkdownTextView: NSViewRepresentable {
     var currentFileURL: URL?
     var viewRefs: ViewRefs?
     var themeMode: String = "system"
+    var fontSize: CGFloat = 13
+    var onFontSizeChange: ((CGFloat) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -274,7 +302,7 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> EditorWrapperView {
-        let scrollView = NSScrollView()
+        let scrollView = EditorScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
@@ -314,7 +342,7 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
-        textView.font = NSFont.systemFont(ofSize: 13)
+        textView.font = NSFont.systemFont(ofSize: fontSize)
         let paragraphStyle = NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
         paragraphStyle.defaultTabInterval = 28
         textView.defaultParagraphStyle = paragraphStyle
@@ -331,9 +359,9 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.onImagePaste = { image in
             context.coordinator.handleImagePaste(image: image)
         }
-
         textView.delegate = context.coordinator
         context.coordinator.textView = textView
+        context.coordinator.setupScrollMonitor()
         scrollView.documentView = textView
 
         textView.textContainerInset = NSSize(width: 0, height: 12)
@@ -347,6 +375,9 @@ struct MarkdownTextView: NSViewRepresentable {
         let textView = wrapper.textView
         let scrollView = wrapper.scrollView
         let coordinator = context.coordinator
+        // Keep coordinator's parent up to date so the NSEvent monitor and
+        // other closures always reference the latest properties.
+        coordinator.parent = self
 
         let isDark = ThemeManager.isDark(for: themeMode)
 
@@ -361,6 +392,15 @@ struct MarkdownTextView: NSViewRepresentable {
                 : NSColor(calibratedWhite: 0.08, alpha: 1.0)
         }
 
+        if fontSize != coordinator.lastAppliedFontSize {
+            coordinator.lastAppliedFontSize = fontSize
+        textView.font = NSFont.systemFont(ofSize: fontSize)
+        context.coordinator.lastAppliedFontSize = fontSize
+            if let storage = textView.textStorage, storage.length > 0 {
+                storage.addAttribute(.font, value: NSFont.systemFont(ofSize: fontSize), range: NSRange(location: 0, length: storage.length))
+            }
+        }
+
         // Fast path: raw strings match — no text change, skip expensive buildCleanMarkdown
         if textView.string == text {
             context.coordinator.scheduleImageProcessing()
@@ -368,7 +408,7 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         if let storage = textView.textStorage {
-            let cleanCurrent = context.coordinator.buildCleanMarkdown(from: storage)
+            let cleanCurrent = Coordinator.buildCleanMarkdown(from: storage)
             if cleanCurrent == text {
                 context.coordinator.scheduleImageProcessing()
                 return
@@ -412,6 +452,10 @@ struct MarkdownTextView: NSViewRepresentable {
         var lastFileURL: URL?
         /// Tracks the last applied isDark value to deduplicate theme application.
         var lastAppliedIsDark: Bool?
+        private var scrollMonitor: Any?
+        private var accumulatedScrollDelta: CGFloat = 0
+        /// Tracks the last applied font size to avoid redundant updateNSView re-application.
+        var lastAppliedFontSize: CGFloat = 0
         private var themeObserver: Any?
         /// Cache of decoded NSImages keyed by URL string. Avoids re-decoding
         /// base64 images on every processInlineImages call (the biggest bottleneck
@@ -449,7 +493,26 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
 
+        func setupScrollMonitor() {
+            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self else { return event }
+                if !event.modifierFlags.contains(.command) {
+                    accumulatedScrollDelta = 0
+                    return event
+                }
+                accumulatedScrollDelta += event.scrollingDeltaY
+                if abs(accumulatedScrollDelta) >= 0.5 {
+                    parent.onFontSizeChange?(accumulatedScrollDelta < 0 ? 1 : -1)
+                    accumulatedScrollDelta = 0
+                }
+                return nil
+            }
+        }
+
         deinit {
+            if let monitor = scrollMonitor {
+                NSEvent.removeMonitor(monitor)
+            }
             if let observer = themeObserver {
                 NotificationCenter.default.removeObserver(observer)
             }
@@ -466,7 +529,7 @@ struct MarkdownTextView: NSViewRepresentable {
             // the text storage. This avoids the \u{FFFC} → base64 expansion
             // on every keystroke that caused layout reflow and scroll-to-end.
             if let storage = textView.textStorage {
-                let cleanText = buildCleanMarkdown(from: storage)
+                let cleanText = Self.buildCleanMarkdown(from: storage)
                 DispatchQueue.main.async {
                     self.parent.text = cleanText
                 }
@@ -479,7 +542,7 @@ struct MarkdownTextView: NSViewRepresentable {
             scheduleImageProcessing()
         }
 
-        func buildCleanMarkdown(from storage: NSTextStorage) -> String {
+        static func buildCleanMarkdown(from storage: NSTextStorage) -> String {
             let fullRange = NSRange(location: 0, length: storage.length)
             let result = NSMutableString(string: storage.string)
             // Walk in reverse so ranges stay valid after string replacements
@@ -648,7 +711,7 @@ struct MarkdownTextView: NSViewRepresentable {
             // Use clean markdown from attachments (not textView.string which
             // has \u{FFFC} after processInlineImages ran) so that subsequent
             // pastes correctly include previous images' markdown syntax.
-            let clean = buildCleanMarkdown(from: storage)
+            let clean = Self.buildCleanMarkdown(from: storage)
             let storageCursor = textView.selectedRange().location
             let current = clean as NSString
 
