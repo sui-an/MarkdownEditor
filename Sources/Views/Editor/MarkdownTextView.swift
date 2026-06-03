@@ -375,8 +375,6 @@ struct MarkdownTextView: NSViewRepresentable {
         let textView = wrapper.textView
         let scrollView = wrapper.scrollView
         let coordinator = context.coordinator
-        // Keep coordinator's parent up to date so the NSEvent monitor and
-        // other closures always reference the latest properties.
         coordinator.parent = self
 
         let isDark = ThemeManager.isDark(for: themeMode)
@@ -385,8 +383,6 @@ struct MarkdownTextView: NSViewRepresentable {
             coordinator.lastAppliedIsDark = isDark
             ThemeManager.applyTheme(textView: textView, scrollView: scrollView, lineNumberView: wrapper.lineNumberView, isDark: isDark)
         } else {
-            // Still update text color even if theme didn't change, so new text
-            // without syntax highlighting has the correct default foreground.
             textView.textColor = isDark
                 ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
                 : NSColor(calibratedWhite: 0.08, alpha: 1.0)
@@ -394,42 +390,40 @@ struct MarkdownTextView: NSViewRepresentable {
 
         if fontSize != coordinator.lastAppliedFontSize {
             coordinator.lastAppliedFontSize = fontSize
-        textView.font = NSFont.systemFont(ofSize: fontSize)
-        context.coordinator.lastAppliedFontSize = fontSize
+            textView.font = NSFont.systemFont(ofSize: fontSize)
             if let storage = textView.textStorage, storage.length > 0 {
                 storage.addAttribute(.font, value: NSFont.systemFont(ofSize: fontSize), range: NSRange(location: 0, length: storage.length))
             }
         }
 
-        // Fast path: raw strings match — no text change, skip expensive buildCleanMarkdown
-        if textView.string == text {
-            context.coordinator.scheduleImageProcessing()
-            return
-        }
+        // On file switch we know the text is different — skip O(n) string equality.
+        let isFileSwitch = coordinator.lastFileURL != currentFileURL
 
-        if let storage = textView.textStorage {
-            let cleanCurrent = Coordinator.buildCleanMarkdown(from: storage)
-            if cleanCurrent == text {
-                context.coordinator.scheduleImageProcessing()
+        if !isFileSwitch {
+            if textView.string == text {
+                coordinator.scheduleImageProcessing()
                 return
+            }
+            if let storage = textView.textStorage {
+                let cleanCurrent = Coordinator.buildCleanMarkdown(from: storage)
+                if cleanCurrent == text {
+                    coordinator.scheduleImageProcessing()
+                    return
+                }
             }
         }
 
-        context.coordinator.suppressTextDidChange = true
+        coordinator.suppressTextDidChange = true
         let selectedRange = textView.selectedRange()
         textView.string = text
-        // textView.textColor is set above and serves as the default foreground
-        // for un-attributed text — no need to addAttribute over the full range.
-        // Syntax highlighting (0.1s delayed) will set per-element colors.
         let safeLocation = min(selectedRange.location, (text as NSString).length)
         textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
-        context.coordinator.suppressTextDidChange = false
-        context.coordinator.scheduleImageProcessing()
+        coordinator.suppressTextDidChange = false
+        coordinator.scheduleImageProcessing()
         if text.isEmpty {
             textView.window?.makeFirstResponder(textView)
         }
-        // Scroll to top-left when switching documents.
-        if context.coordinator.lastFileURL != currentFileURL {
+        if isFileSwitch {
             textView.undoManager?.removeAllActions()
             if !text.isEmpty {
                 textView.layoutManager?.ensureLayout(for: textView.textContainer!)
@@ -437,7 +431,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 scrollView.reflectScrolledClipView(scrollView.contentView)
             }
         }
-        context.coordinator.lastFileURL = currentFileURL
+        coordinator.lastFileURL = currentFileURL
         wrapper.lineNumberView.needsDisplay = true
     }
 
@@ -558,6 +552,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
         func scheduleImageProcessing() {
             NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(processInlineImages), object: nil)
+            guard let textView, textView.string.contains("![") else { return }
             perform(#selector(processInlineImages), with: nil, afterDelay: 0.2)
         }
 

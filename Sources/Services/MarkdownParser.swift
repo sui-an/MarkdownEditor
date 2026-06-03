@@ -68,14 +68,36 @@ enum MarkdownParser {
         ensureGFMExtensions()
         #endif
 
-        let mermaidResult = extractMermaidBlocks(markdown)
-        // Pre-process base64 data URIs before cmark-gfm (avoids 4096-byte URL limit)
-        let preprocessed = preprocessBase64Images(mermaidResult.text)
+        // Fast-path: skip expensive regex pre-processing when not needed.
+        // contains() is O(n) with early exit — much cheaper than NSRegularExpression
+        // scanning the entire text for patterns that don't exist.
+        let hasMermaid = markdown.contains("```mermaid")
+        let hasBase64 = markdown.contains("data:image/")
+
+        var mermaidResult: MermaidExtractResult?
+        let preprocessed: String
+
+        if hasMermaid {
+            let result = extractMermaidBlocks(markdown)
+            mermaidResult = result
+            preprocessed = hasBase64 ? preprocessBase64Images(result.text) : result.text
+        } else if hasBase64 {
+            preprocessed = preprocessBase64Images(markdown)
+        } else {
+            preprocessed = markdown
+        }
+
         let bodyHTML = renderBody(preprocessed)
-        let finalBody = injectHeadingIDs(reinsertMermaidBlocks(bodyHTML, mermaidResult))
+
+        let finalBody: String
+        if let result = mermaidResult {
+            finalBody = injectHeadingIDs(reinsertMermaidBlocks(bodyHTML, result))
+        } else {
+            finalBody = injectHeadingIDs(bodyHTML)
+        }
 
         let css = Self.previewCSS
-        let mermaidScript = mermaidResult.blocks.isEmpty ? "" : mermaidHTML()
+        let mermaidScript = (mermaidResult?.blocks.isEmpty ?? true) ? "" : mermaidHTML()
 
         let full = """
         <!DOCTYPE html>
@@ -179,6 +201,10 @@ enum MarkdownParser {
 
     /// Inject id="heading-{slug}" into <h1>-<h6> tags for outline scroll sync.
     private static func injectHeadingIDs(_ html: String) -> String {
+        // Fast-path: no heading tags → return unchanged.
+        // Avoids NSRegularExpression scanning 10MB+ of HTML for nothing.
+        guard hasHeadingTags(html) else { return html }
+
         let nsHTML = html as NSString
         guard let regex = try? NSRegularExpression(
             pattern: #"<h([1-6])([^>]*)>(.*?)</h\1>"#,
@@ -278,6 +304,30 @@ enum MarkdownParser {
             }
         }
         return result
+    }
+
+    /// Returns true if the HTML contains any `<h1>`–`<h6>` tags.
+    /// Uses character-by-character scanning (not regex) so it can exit early.
+    /// Avoids NSRegularExpression's overhead on large HTML bodies with no headings.
+    private static func hasHeadingTags(_ html: String) -> Bool {
+        var i = html.startIndex
+        let end = html.endIndex
+        while i < end {
+            if html[i] == "<" {
+                i = html.index(after: i)
+                guard i < end else { break }
+                let c = html[i]
+                if c == "h" || c == "H" {
+                    i = html.index(after: i)
+                    guard i < end else { break }
+                    let d = html[i]
+                    if d >= "1" && d <= "6" { return true }
+                    continue
+                }
+            }
+            html.formIndex(after: &i)
+        }
+        return false
     }
 
     // MARK: - Preview CSS

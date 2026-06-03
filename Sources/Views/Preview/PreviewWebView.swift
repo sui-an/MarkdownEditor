@@ -11,6 +11,9 @@ final class WebViewState: NSObject, WKNavigationDelegate {
     /// Non-nil when a font-size change arrived before the page finished loading.
     /// Applied in webView(_:didFinish:) so we never evaluate JS on an empty page.
     var pendingFontSize: CGFloat?
+    /// True once mermaid.min.js has been injected into this WebView.
+    /// Reset to false on page navigation (loadHTMLString).
+    var mermaidInjected = false
     private var scrollerConfigured = false
 
     func configureScrollView(_ webView: WKWebView) {
@@ -24,14 +27,12 @@ final class WebViewState: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // If body content was already saved before the template finished loading
-        // (e.g. re-attaching a cached WebView where content had been generated),
-        // inject it now so the preview isn't blank.
+        mermaidInjected = false
+
         if !lastBodyHTML.isEmpty {
             updateBodyViaJS(webView, bodyHTML: lastBodyHTML)
         }
         webView.evaluateJavaScript("""
-        if (typeof mermaid !== 'undefined') { mermaid.run({ querySelector: '.mermaid' }); }
         if (typeof hljs !== 'undefined') { hljs.highlightAll(); }
         """)
         if let size = pendingFontSize {
@@ -42,6 +43,43 @@ final class WebViewState: NSObject, WKNavigationDelegate {
             needsScrollReset = false
             webView.evaluateJavaScript("window.scrollTo(0, 0)")
         }
+        // Check if mermaid is needed (tiny evaluateJavaScript, no 3.2MB payload).
+        // If the page has .mermaid elements, inject mermaid.min.js.
+        tryInjectMermaidInitial(webView)
+    }
+
+    /// Initial page load path — checks for `.mermaid` via native evaluateJavaScript
+    /// (tiny payload, <1ms) before deciding to inject 3.2MB mermaid.min.js.
+    private func tryInjectMermaidInitial(_ webView: WKWebView) {
+        guard !mermaidInjected, let mmdJS = WebViewCache.cachedMermaidJS else { return }
+        webView.evaluateJavaScript("document.querySelector('.mermaid') !== null") { [weak self] result, _ in
+            guard let self, let needsMermaid = result as? Bool, needsMermaid,
+                  !self.mermaidInjected else { return }
+            self.mermaidInjected = true
+            self.doInjectMermaid(webView, mmdJS: mmdJS)
+        }
+    }
+
+    /// Incremental body update path — uses cached bodyHTML for a cheap
+    /// contains() check on the Swift side before injecting 3.2MB.
+    private func tryInjectMermaidIncremental(_ webView: WKWebView) {
+        guard !mermaidInjected, let mmdJS = WebViewCache.cachedMermaidJS,
+              lastBodyHTML.contains("mermaid") else { return }
+        mermaidInjected = true
+        doInjectMermaid(webView, mmdJS: mmdJS)
+    }
+
+    private func doInjectMermaid(_ webView: WKWebView, mmdJS: String) {
+        let literal = String.jsLiteral(mmdJS)
+        webView.evaluateJavaScript("""
+        (function() {
+            if (typeof mermaid !== 'undefined') return;
+            var s = document.createElement('script');
+            s.textContent = \(literal);
+            document.head.appendChild(s);
+            mermaid.run({ querySelector: '.mermaid' });
+        })();
+        """)
     }
 
     func updateBodyViaJS(_ webView: WKWebView, bodyHTML: String, searchQuery: String = "") {
@@ -49,9 +87,9 @@ final class WebViewState: NSObject, WKNavigationDelegate {
         webView.evaluateJavaScript("""
         document.getElementById('md-content').innerHTML = \(jsonStr);
         if (typeof hljs !== 'undefined') hljs.highlightAll();
-        if (typeof mermaid !== 'undefined') mermaid.run({ querySelector: '.mermaid' });
         \(SearchJS.highlight(query: searchQuery))
         """)
+        tryInjectMermaidIncremental(webView)
     }
 
 }
@@ -67,7 +105,7 @@ final class WebViewCache {
         return content
     }()
 
-    private static let cachedMermaidJS: String? = {
+    static let cachedMermaidJS: String? = {
         guard let path = Bundle.main.path(forResource: "mermaid.min", ofType: "js"),
               let content = try? String(contentsOfFile: path) else { return nil }
         return content
@@ -143,17 +181,16 @@ final class WebViewCache {
     private func createWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
 
-        // highlight.js — injected once, persists across incremental DOM updates
+        // highlight.js — injected once, persists across incremental DOM updates.
         if let hljsJS = Self.cachedHighlightJS {
             let script = WKUserScript(source: hljsJS, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
             config.userContentController.addUserScript(script)
         }
 
-        // mermaid.min.js — injected once, persists across incremental DOM updates.
-        if let mmdJS = Self.cachedMermaidJS {
-            let script = WKUserScript(source: mmdJS, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
-            config.userContentController.addUserScript(script)
-        }
+        // mermaid.min.js is NOT added unconditionally (it's 3.2MB and most
+        // files don't have mermaid blocks).  It's injected dynamically via
+        // injectMermaidIfNeeded() only when the rendered content actually
+        // contains `.mermaid` elements.
 
         // Convert data URI images to Blob URLs — WKWebView may struggle with
         // very long base64 data URIs loaded via loadHTMLString.
