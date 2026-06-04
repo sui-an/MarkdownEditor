@@ -271,7 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WindowManager.shared.createWindow()
             }
         }
-        return true
+        return false
     }
 }
 
