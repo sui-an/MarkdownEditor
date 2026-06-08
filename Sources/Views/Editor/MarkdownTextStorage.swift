@@ -133,46 +133,31 @@ final class MarkdownTextStorage: NSTextStorage {
     // MARK: - Semantic highlight colors
 
     private enum HighlightColors {
-        static func header(_ isDark: Bool) -> NSColor {
-            isDark
-                ? NSColor(red: 0.40, green: 0.70, blue: 1.00, alpha: 1)
-                : NSColor(red: 0.00, green: 0.48, blue: 1.00, alpha: 1)
-        }
-        static func quote(_ isDark: Bool) -> NSColor {
-            isDark
-                ? NSColor(red: 0.65, green: 0.70, blue: 0.75, alpha: 1)
-                : NSColor(red: 0.50, green: 0.55, blue: 0.60, alpha: 1)
-        }
-        static func code(_ isDark: Bool) -> NSColor {
-            isDark
-                ? NSColor(red: 0.20, green: 0.80, blue: 0.50, alpha: 1)
-                : NSColor(red: 0.00, green: 0.62, blue: 0.35, alpha: 1)
-        }
-        static func link(_ isDark: Bool) -> NSColor {
-            isDark
-                ? NSColor(red: 0.80, green: 0.55, blue: 1.00, alpha: 1)
-                : NSColor(red: 0.65, green: 0.35, blue: 0.85, alpha: 1)
-        }
-        static func image(_ isDark: Bool) -> NSColor {
-            isDark
-                ? NSColor(red: 1.00, green: 0.50, blue: 0.70, alpha: 1)
-                : NSColor(red: 0.90, green: 0.30, blue: 0.55, alpha: 1)
-        }
-        static func bold(_ isDark: Bool) -> NSColor {
-            isDark
-                ? NSColor(red: 1.00, green: 0.60, blue: 0.20, alpha: 1)
-                : NSColor(red: 1.00, green: 0.45, blue: 0.00, alpha: 1)
-        }
-        static func italic(_ isDark: Bool) -> NSColor {
-            isDark
-                ? NSColor(red: 0.65, green: 0.65, blue: 0.65, alpha: 1)
-                : NSColor(red: 0.50, green: 0.50, blue: 0.50, alpha: 1)
-        }
-        static func strike(_ isDark: Bool) -> NSColor {
-            isDark
-                ? NSColor(red: 0.70, green: 0.70, blue: 0.75, alpha: 1)
-                : NSColor(red: 0.60, green: 0.60, blue: 0.65, alpha: 1)
-        }
+        static let headerLight = NSColor(red: 0.00, green: 0.48, blue: 1.00, alpha: 1)
+        static let headerDark = NSColor(red: 0.40, green: 0.70, blue: 1.00, alpha: 1)
+        static let quoteLight = NSColor(red: 0.50, green: 0.55, blue: 0.60, alpha: 1)
+        static let quoteDark = NSColor(red: 0.65, green: 0.70, blue: 0.75, alpha: 1)
+        static let codeLight = NSColor(red: 0.00, green: 0.62, blue: 0.35, alpha: 1)
+        static let codeDark = NSColor(red: 0.20, green: 0.80, blue: 0.50, alpha: 1)
+        static let linkLight = NSColor(red: 0.65, green: 0.35, blue: 0.85, alpha: 1)
+        static let linkDark = NSColor(red: 0.80, green: 0.55, blue: 1.00, alpha: 1)
+        static let imageLight = NSColor(red: 0.90, green: 0.30, blue: 0.55, alpha: 1)
+        static let imageDark = NSColor(red: 1.00, green: 0.50, blue: 0.70, alpha: 1)
+        static let boldLight = NSColor(red: 1.00, green: 0.45, blue: 0.00, alpha: 1)
+        static let boldDark = NSColor(red: 1.00, green: 0.60, blue: 0.20, alpha: 1)
+        static let italicLight = NSColor(red: 0.50, green: 0.50, blue: 0.50, alpha: 1)
+        static let italicDark = NSColor(red: 0.65, green: 0.65, blue: 0.65, alpha: 1)
+        static let strikeLight = NSColor(red: 0.60, green: 0.60, blue: 0.65, alpha: 1)
+        static let strikeDark = NSColor(red: 0.70, green: 0.70, blue: 0.75, alpha: 1)
+
+        static func header(_ isDark: Bool) -> NSColor { isDark ? headerDark : headerLight }
+        static func quote(_ isDark: Bool) -> NSColor { isDark ? quoteDark : quoteLight }
+        static func code(_ isDark: Bool) -> NSColor { isDark ? codeDark : codeLight }
+        static func link(_ isDark: Bool) -> NSColor { isDark ? linkDark : linkLight }
+        static func image(_ isDark: Bool) -> NSColor { isDark ? imageDark : imageLight }
+        static func bold(_ isDark: Bool) -> NSColor { isDark ? boldDark : boldLight }
+        static func italic(_ isDark: Bool) -> NSColor { isDark ? italicDark : italicLight }
+        static func strike(_ isDark: Bool) -> NSColor { isDark ? strikeDark : strikeLight }
     }
 
     // MARK: - Headers
@@ -208,36 +193,24 @@ final class MarkdownTextStorage: NSTextStorage {
         let searchRange = range ?? NSRange(location: 0, length: length)
 
         for match in Self.boldRegex.matches(in: text as String, range: searchRange) {
-            if match.range(at: 1).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.bold(isDark), range: match.range(at: 1))
-            }
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.bold(isDark), range: match.range(at: 1))
         }
         for match in Self.italicStarRegex.matches(in: text as String, range: searchRange) {
-            if match.range(at: 1).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic(isDark), range: match.range(at: 1))
-            }
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic(isDark), range: match.range(at: 1))
         }
         for match in Self.italicUnderscoreRegex.matches(in: text as String, range: searchRange) {
-            if match.range(at: 1).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic(isDark), range: match.range(at: 1))
-            }
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic(isDark), range: match.range(at: 1))
         }
         for match in Self.linkRegex.matches(in: text as String, range: searchRange) {
-            if match.range(at: 1).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.link(isDark), range: match.range(at: 1))
-            }
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.link(isDark), range: match.range(at: 1))
         }
         for match in Self.imageRegex.matches(in: text as String, range: searchRange) {
-            if match.range(at: 1).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.image(isDark), range: match.range(at: 1))
-            }
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.image(isDark), range: match.range(at: 1))
         }
         for match in Self.strikeRegex.matches(in: text as String, range: searchRange) {
-            if match.range(at: 1).location != NSNotFound {
-                let r = match.range(at: 1)
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.strike(isDark), range: r)
-                backingStore.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: r)
-            }
+            let r = match.range(at: 1)
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.strike(isDark), range: r)
+            backingStore.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: r)
         }
     }
 }

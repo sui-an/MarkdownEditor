@@ -31,7 +31,6 @@ final class WindowManager: NSObject {
     private var appStates: [NSWindow: AppState] = [:]
 
     func createWindow() {
-        print("[WindowManager] createWindow — total windows: \(windows.count + 1)")
         // Create a dedicated AppState for this window to guarantee isolation.
         // SwiftUI @State + @Observable can share storage across NSHostingController
         // instances on macOS 14; passing the instance explicitly avoids that.
@@ -59,6 +58,9 @@ final class WindowManager: NSObject {
 extension WindowManager: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
+        // Save dirty file before closing (since selectFile no longer saves
+        // on each file switch, this ensures no edit is lost when quitting).
+        appStates[window]?.saveCurrentFileIfDirty()
         appStates.removeValue(forKey: window)
         windows.remove(window)
     }
@@ -163,20 +165,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static var focusedStateHandle: UInt8 = 0
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        print("[AppDelegate] open: \(urls.map { $0.lastPathComponent })")
         cancelSessionRestore()
         SessionRestoreCoordinator.shared.clear()
 
         if didFinishLaunching {
             let shouldCreate = FileOpenCoordinator.shared.addFiles(urls)
-            print("[AppDelegate] addFiles returned \(shouldCreate)")
             if shouldCreate {
                 WindowManager.shared.createWindow()
             }
             NSApp.activate(ignoringOtherApps: true)
         } else {
             _ = FileOpenCoordinator.shared.addFiles(urls)
-            print("[AppDelegate] stored files before finishLaunching")
         }
     }
 

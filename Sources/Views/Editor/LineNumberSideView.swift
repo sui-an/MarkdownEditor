@@ -18,6 +18,13 @@ final class LineNumberSideView: NSView {
     }
     private let textColor = NSColor.secondaryLabelColor
 
+    private let labelParagraphStyle: NSParagraphStyle = {
+        let s = NSMutableParagraphStyle()
+        s.alignment = .right
+        s.lineBreakMode = .byClipping
+        return s
+    }()
+
     // Newline position cache for O(log n) line number lookup
     private var newlinePositions: [Int] = []
     private var cachedTextLength: Int = 0
@@ -55,12 +62,11 @@ final class LineNumberSideView: NSView {
         let currentLength = text.length
         guard cachedTextLength != currentLength else { return }
 
-        var positions: [Int] = []
-        var range = NSRange(location: 0, length: 0)
-        while range.location < currentLength {
-            range = text.lineRange(for: NSRange(location: NSMaxRange(range), length: 0))
-            if range.location < currentLength {
-                positions.append(range.location)
+        var positions: [Int] = [0]
+        positions.reserveCapacity(currentLength / 40)
+        for i in 0..<currentLength {
+            if text.character(at: i) == 10 { // \n
+                positions.append(i + 1)
             }
         }
         newlinePositions = positions
@@ -119,26 +125,33 @@ final class LineNumberSideView: NSView {
             lineNumber = lo + 1
         }
 
-        let paraStyle = NSMutableParagraphStyle()
-        paraStyle.alignment = .right
-        paraStyle.lineBreakMode = .byClipping
-
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: textColor,
-            .paragraphStyle: paraStyle
+            .paragraphStyle: labelParagraphStyle
         ]
 
         let viewWidth = bounds.width
-        var charIndex = charRange.location
         var lineIndex = lineNumber
 
-        while charIndex < textLength {
-            let lineRange = textContent.lineRange(for: NSRange(location: charIndex, length: 0))
+        while lineIndex - 1 < newlinePositions.count {
+            let lineStart = newlinePositions[lineIndex - 1]
+            let lineLength: Int
+            if lineIndex < newlinePositions.count {
+                lineLength = newlinePositions[lineIndex] - lineStart
+            } else {
+                lineLength = textLength - lineStart
+            }
+            guard lineLength > 0 else { lineIndex += 1; continue }
+            let lineRange = NSRange(location: lineStart, length: lineLength)
+
             let glyphRange = layoutManager.glyphRange(
                 forCharacterRange: lineRange,
                 actualCharacterRange: nil
             )
+            guard glyphRange.location != NSNotFound, glyphRange.length > 0 else {
+                lineIndex += 1; continue
+            }
             let fragRect = layoutManager.lineFragmentRect(
                 forGlyphAt: glyphRange.location,
                 effectiveRange: nil
@@ -158,7 +171,6 @@ final class LineNumberSideView: NSView {
                 lineStr.draw(in: labelRect, withAttributes: attrs)
             }
 
-            charIndex = NSMaxRange(lineRange)
             lineIndex += 1
         }
     }

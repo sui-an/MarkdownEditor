@@ -41,13 +41,23 @@ struct SidebarView: View {
                             folder: folder,
                             onRemove: { appState.removeFolder(id: folder.id) }
                         )
+
+                        let flatFiles = appState.flatFolderFilesByFolder[folder.id] ?? []
+                        ForEach(flatFiles, id: \.item.id) { flatFile in
+                            FileRowView(
+                                item: flatFile.item,
+                                isSelected: appState.selectedFileID == flatFile.item.id
+                            )
+                            .padding(.leading, CGFloat(flatFile.depth * 12))
+                            .tag(flatFile.item.id)
+                            .contextMenu {
+                                Button("Reveal in Finder") {
+                                    NSWorkspace.shared.activateFileViewerSelecting([flatFile.item.url])
+                                }
+                            }
+                        }
                     } header: {
                         EmptyView()
-                    }
-
-                    if let children = folder.children {
-                        FolderTreeView(items: children, appState: appState)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 0))
                     }
                 }
             }
@@ -57,6 +67,7 @@ struct SidebarView: View {
         .frame(minWidth: 180)
         .onChange(of: appState.selectedFileID) { _, newValue in
             guard let id = newValue else { return }
+            appState.prepareFileSwitch(to: id)
             appState.selectFile(id: id)
         }
     }

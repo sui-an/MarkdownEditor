@@ -203,12 +203,23 @@ enum MarkdownParser {
     }
 
     private static func reinsertCodeBlocks(_ text: String, _ blocks: [(String, String)]) -> String {
-        var out = text
+        guard !blocks.isEmpty else { return text }
+        var result = ""
+        result.reserveCapacity(text.utf8.count)
+        var remaining = text[...]
         for (i, (lang, content)) in blocks.enumerated() {
-            let codeBlock = "```\(lang)\n\(content)```"
-            out = out.replacingOccurrences(of: "%%CODEBLOCK_\(i)%%", with: codeBlock)
+            let placeholder = "%%CODEBLOCK_\(i)%%"
+            guard let range = remaining.range(of: placeholder) else { continue }
+            result += remaining[..<range.lowerBound]
+            result += "```"
+            result += lang
+            result += "\n"
+            result += content
+            result += "```"
+            remaining = remaining[range.upperBound...]
         }
-        return out
+        result += remaining
+        return result
     }
 
     // MARK: - Mermaid extraction

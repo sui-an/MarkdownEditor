@@ -51,6 +51,7 @@ final class SearchPanel: NSPanel {
         // Wire close callback (no retain cycle)
         hosting.rootView.onClose = { [weak self] in self?.close() }
 
+        searchState.isVisible = true
         makeKeyAndOrderFront(nil)
     }
 

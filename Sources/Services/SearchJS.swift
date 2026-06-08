@@ -1,8 +1,10 @@
 import Foundation
 
 extension String {
+    private static let jsEncoder = JSONEncoder()
+
     static func jsLiteral(_ value: String) -> String {
-        (try? JSONEncoder().encode(value))
+        (try? jsEncoder.encode(value))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
     }
 }

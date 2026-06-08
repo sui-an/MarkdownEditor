@@ -7,6 +7,8 @@ import AppKit
 final class WebViewState: NSObject, WKNavigationDelegate {
     var needsScrollReset = false
     var lastBodyHTML = ""
+    var lastBaseURL: String?
+    var lastSearchQuery = ""
     var hasLoadedContent = false
     /// Non-nil when a font-size change arrived before the page finished loading.
     /// Applied in webView(_:didFinish:) so we never evaluate JS on an empty page.
@@ -30,7 +32,11 @@ final class WebViewState: NSObject, WKNavigationDelegate {
         mermaidInjected = false
 
         if !lastBodyHTML.isEmpty {
-            updateBodyViaJS(webView, bodyHTML: lastBodyHTML)
+            let base = lastBaseURL
+            let query = lastSearchQuery
+            lastBaseURL = nil
+            lastSearchQuery = ""
+            updateBodyViaJS(webView, bodyHTML: lastBodyHTML, baseURL: base, searchQuery: query)
         }
         webView.evaluateJavaScript("""
         if (typeof hljs !== 'undefined') { hljs.highlightAll(); }
@@ -62,9 +68,14 @@ final class WebViewState: NSObject, WKNavigationDelegate {
 
     /// Incremental body update path — uses cached bodyHTML for a cheap
     /// contains() check on the Swift side before injecting 3.2MB.
+    /// If mermaid is already injected, just re-run for new content.
     private func tryInjectMermaidIncremental(_ webView: WKWebView) {
-        guard !mermaidInjected, let mmdJS = WebViewCache.cachedMermaidJS,
+        guard let mmdJS = WebViewCache.cachedMermaidJS,
               lastBodyHTML.contains("mermaid") else { return }
+        if mermaidInjected {
+            webView.evaluateJavaScript("mermaid.run({ querySelector: '.mermaid' })")
+            return
+        }
         mermaidInjected = true
         doInjectMermaid(webView, mmdJS: mmdJS)
     }
@@ -82,9 +93,21 @@ final class WebViewState: NSObject, WKNavigationDelegate {
         """)
     }
 
-    func updateBodyViaJS(_ webView: WKWebView, bodyHTML: String, searchQuery: String = "") {
+    func updateBodyViaJS(_ webView: WKWebView, bodyHTML: String, baseURL: String? = nil, searchQuery: String = "") {
         let jsonStr = String.jsLiteral(bodyHTML)
+        let baseJSCode: String
+        if let url = baseURL {
+            let literal = String.jsLiteral(url)
+            baseJSCode = """
+            var b = document.querySelector('base');
+            if (!b) { b = document.createElement('base'); document.head.appendChild(b); }
+            b.href = \(literal);
+            """
+        } else {
+            baseJSCode = ""
+        }
         webView.evaluateJavaScript("""
+        \(baseJSCode)
         document.getElementById('md-content').innerHTML = \(jsonStr);
         if (typeof hljs !== 'undefined') hljs.highlightAll();
         \(SearchJS.highlight(query: searchQuery))
@@ -94,7 +117,7 @@ final class WebViewState: NSObject, WKNavigationDelegate {
 
 }
 
-// MARK: - WebView cache (per-fileID)
+// MARK: - WebView cache (shared single WebView)
 
 final class WebViewCache {
     // Pre-cached JS scripts — read from disk once, avoids blocking the main
@@ -118,65 +141,37 @@ final class WebViewCache {
         _ = cachedMermaidJS
     }
 
-    private var cache: [String: WKWebView] = [:]
-    private var states: [ObjectIdentifier: WebViewState] = [:]
-    private var urlToFileID: [URL: String] = [:]
-    private var accessOrder: [String] = []
-    private let maxEntries = 10
+    private var sharedWebView: WKWebView?
+    private var sharedState: WebViewState?
 
-    /// Returns the WebView (and its state) for the given fileID.
-    /// Creates a new WebView on first access. LRU evicts when over limit.
+    /// Returns the shared WebView (and its state). Creates on first access
+    /// with a preloaded CSS template so all content goes via `updateBodyViaJS`.
     func webView(for fileID: String, url: URL) -> (WKWebView, WebViewState) {
-        urlToFileID[url] = fileID
-
-        if let existing = cache[fileID] {
-            touch(fileID)
-            return (existing, state(for: existing))
+        if let wv = sharedWebView, let state = sharedState {
+            return (wv, state)
         }
-
         let webView = createWebView()
         let state = WebViewState()
         webView.navigationDelegate = state
+        sharedWebView = webView
+        sharedState = state
 
-        cache[fileID] = webView
-        states[ObjectIdentifier(webView)] = state
-        accessOrder.append(fileID)
-
-        if accessOrder.count > maxEntries {
-            evictOldest()
-        }
+        state.hasLoadedContent = true
+        let css = MarkdownParser.previewCSS
+        webView.loadHTMLString("""
+        <!DOCTYPE html><html><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>\(css)</style></head><body><div id="md-content"></div></body></html>
+        """, baseURL: nil)
 
         return (webView, state)
     }
 
-    /// Remove cached WebView by fileID (file closed).
-    func remove(for fileID: String) {
-        guard let webView = cache.removeValue(forKey: fileID) else { return }
-        states.removeValue(forKey: ObjectIdentifier(webView))
-        accessOrder.removeAll { $0 == fileID }
-        urlToFileID = urlToFileID.filter { $0.value != fileID }
-    }
+    /// No-op: shared WebView stays alive for all files.
+    func remove(for fileID: String) {}
 
-    /// Remove cached WebView by file URL.
-    func removeWebView(for url: URL) {
-        guard let fileID = urlToFileID[url] else { return }
-        remove(for: fileID)
-    }
-
-    private func touch(_ fileID: String) {
-        accessOrder.removeAll { $0 == fileID }
-        accessOrder.append(fileID)
-    }
-
-    private func evictOldest() {
-        guard accessOrder.count > maxEntries else { return }
-        let oldest = accessOrder.removeFirst()
-        remove(for: oldest)
-    }
-
-    private func state(for webView: WKWebView) -> WebViewState {
-        states[ObjectIdentifier(webView)]!
-    }
+    /// No-op: shared WebView stays alive for all files.
+    func removeWebView(for url: URL) {}
 
     private func createWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -309,7 +304,9 @@ struct PreviewWebView: NSViewRepresentable {
                 // (which causes a WKWebView page-reload flash). Just inject the body.
                 if !bodyHTML.isEmpty {
                     state.lastBodyHTML = bodyHTML
-                    state.updateBodyViaJS(webView, bodyHTML: bodyHTML, searchQuery: viewRefs?.lastSearchQuery ?? "")
+                    state.lastBaseURL = fileURL.deletingLastPathComponent().absoluteString
+                    state.lastSearchQuery = viewRefs?.lastSearchQuery ?? ""
+                    state.updateBodyViaJS(webView, bodyHTML: bodyHTML, baseURL: state.lastBaseURL, searchQuery: state.lastSearchQuery)
                 }
             } else if !html.isEmpty {
                 state.hasLoadedContent = true
@@ -320,7 +317,9 @@ struct PreviewWebView: NSViewRepresentable {
             if state.hasLoadedContent {
                 if !bodyHTML.isEmpty && bodyHTML != state.lastBodyHTML {
                     state.lastBodyHTML = bodyHTML
-                    state.updateBodyViaJS(webView, bodyHTML: bodyHTML, searchQuery: viewRefs?.lastSearchQuery ?? "")
+                    state.lastBaseURL = fileURL.deletingLastPathComponent().absoluteString
+                    state.lastSearchQuery = viewRefs?.lastSearchQuery ?? ""
+                    state.updateBodyViaJS(webView, bodyHTML: bodyHTML, baseURL: state.lastBaseURL, searchQuery: state.lastSearchQuery)
                 }
                 // Toggle content width based on previewContentWidth setting
                 if context.coordinator.lastPreviewContentWidth != previewContentWidth {
@@ -341,8 +340,7 @@ struct PreviewWebView: NSViewRepresentable {
 
     static func dismantleNSView(_ container: NSView, coordinator: Coordinator) {
         // WebView lifecycle is managed by WebViewCache.
-        // Just detach from the container — the WebView stays alive for
-        // later re-use when the user switches back to this file.
+        // Just detach from the container — the shared WebView stays alive.
         container.subviews.forEach { $0.removeFromSuperview() }
         coordinator.currentWebView = nil
     }
@@ -425,9 +423,6 @@ private func injectTheme(_ webView: WKWebView, isDark: Bool) {
     ]
 
     let css = vars.map { "\($0.0): \($0.1) !important;" }.joined(separator: " ")
-    let escapedCSS = (try? JSONEncoder().encode(css))
-        .flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
-
     webView.evaluateJavaScript("""
     (function() {
         var id = 'md-theme-override';
@@ -437,7 +432,7 @@ private func injectTheme(_ webView: WKWebView, isDark: Bool) {
             el.id = id;
             document.head.appendChild(el);
         }
-        el.textContent = ':root { ' + \(escapedCSS) + ' }';
+        el.textContent = ':root { ' + \(String.jsLiteral(css)) + ' }';
     })();
     """)
 }

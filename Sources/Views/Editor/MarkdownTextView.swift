@@ -104,11 +104,6 @@ final class ImageDropTextView: NSTextView {
             }
         }
 
-        if let image = NSImage(pasteboard: pasteboard) {
-            onImagePaste?(image)
-            return
-        }
-
         super.paste(sender)
     }
 }
@@ -399,26 +394,60 @@ struct MarkdownTextView: NSViewRepresentable {
 
         let isFileSwitch = coordinator.lastFileURL != currentFileURL
 
-        if !isFileSwitch {
-            if textView.string == text {
-                coordinator.scheduleImageProcessing()
-                return
-            }
-            if let storage = textView.textStorage {
-                let cleanCurrent = Coordinator.buildCleanMarkdown(from: storage)
-                if cleanCurrent == text {
-                    coordinator.scheduleImageProcessing()
-                    return
-                }
-            }
-        } else if textView.string == text {
-            // Cache hit on file switch — content identical, no replacement needed.
+        // Phase 1: file-switch (currentFileURL changed)
+        // text is still the *old* file's content.  Only lightweight ops.
+        if isFileSwitch {
             coordinator.lastFileURL = currentFileURL
-            coordinator.scheduleImageProcessing()
-            wrapper.lineNumberView.needsDisplay = true
+            coordinator.hasInlineImages = text.contains("![")
+            coordinator.pendingContentLoad = true
+            textView.undoManager?.removeAllActions()
+            if !text.isEmpty {
+                scrollView.contentView.scroll(to: .zero)
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
             return
         }
 
+        // Phase 2: file-switch content has arrived
+        // currentFileContent changed, flag is set → set text directly
+        if coordinator.pendingContentLoad {
+            coordinator.pendingContentLoad = false
+
+            if textView.string == text {
+                coordinator.scheduleImageProcessing()
+                wrapper.lineNumberView.needsDisplay = true
+                return
+            }
+
+            coordinator.suppressTextDidChange = true
+            textView.string = text
+            textView.setSelectedRange(NSRange(location: 0, length: 0))
+            coordinator.suppressTextDidChange = false
+            coordinator.scheduleImageProcessing()
+            coordinator.editorWrapper?.lineNumberView.needsDisplay = true
+            if text.isEmpty {
+                textView.window?.makeFirstResponder(textView)
+            }
+            return
+        }
+
+        // ─── Phase 3: real keystroke (must be synchronous) ───
+        if textView.string == text {
+            coordinator.scheduleImageProcessing()
+            return
+        }
+        if let storage = textView.textStorage {
+            let cleanCurrent = Coordinator.buildCleanMarkdown(from: storage)
+            if cleanCurrent == text {
+                coordinator.scheduleImageProcessing()
+                return
+            }
+        }
+
+#if DEBUG
+        let tSync = CACurrentMediaTime()
+        print("[perf] 📝 Phase3 sync textView.string (textView!=text)")
+#endif
         coordinator.hasInlineImages = text.contains("![")
         coordinator.suppressTextDidChange = true
         let selectedRange = textView.selectedRange()
@@ -430,16 +459,11 @@ struct MarkdownTextView: NSViewRepresentable {
         if text.isEmpty {
             textView.window?.makeFirstResponder(textView)
         }
-        if isFileSwitch {
-            textView.undoManager?.removeAllActions()
-            if !text.isEmpty {
-                textView.layoutManager?.ensureLayout(for: textView.textContainer!)
-                scrollView.contentView.scroll(to: .zero)
-                scrollView.reflectScrolledClipView(scrollView.contentView)
-            }
-        }
-        coordinator.lastFileURL = currentFileURL
         wrapper.lineNumberView.needsDisplay = true
+#if DEBUG
+        let syncDt = (CACurrentMediaTime() - tSync) * 1000
+        print("[perf] 📝 Phase3 sync done \(String(format: "%.3f", syncDt))ms")
+#endif
     }
 
     // MARK: - Coordinator
@@ -451,6 +475,15 @@ struct MarkdownTextView: NSViewRepresentable {
         var suppressTextDidChange = false
         /// Tracks the last opened file URL so we can detect document switches.
         var lastFileURL: URL?
+        /// Set to true in the file‑switch path (phase 1) when textView.string
+        /// has not yet been updated to the new file’s content.  The next
+        /// updateNSView call (triggered by currentFileContent changing) will
+        /// see this flag and defer textView.string = text instead of applying
+        /// it synchronously.
+        var pendingContentLoad = false
+        /// Monotonically increasing generation for file-switch text deferral.
+        /// Each file switch increments this; stale deferred blocks are skipped.
+        var fileSwitchGen: Int64 = 0
         /// Cached flag: does the current file contain `![` (inline image syntax)?
         /// Avoids O(n) string scan on every keystroke for files without images.
         var hasInlineImages = false

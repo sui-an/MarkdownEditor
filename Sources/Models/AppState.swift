@@ -15,6 +15,13 @@ private final class CachedHTML {
     }
 }
 
+// MARK: - Flat Folder File
+
+struct FlatFolderFile {
+    let item: FileTreeItem
+    let depth: Int
+}
+
 // MARK: - AppState
 
 @Observable
@@ -30,7 +37,6 @@ final class AppState {
     /// full-page reload via loadHTMLString on every keystroke).
     var renderedBodyHTML: String = ""
     var isFileDirty: Bool = false
-    var isLoadingFile: Bool = false
     var searchState: SearchState
     var outlineHeadings: [HeadingItem] = []
     var isOutlineVisible = false
@@ -77,7 +83,7 @@ final class AppState {
     private let htmlCache = NSCache<NSURL, CachedHTML>()
 
     /// Monotonically increasing generation counter. Incremented on each file switch;
-    /// stale background tasks whose token no longer matches silently discard results.
+    /// stale background tasks whose token no longer match silently discard results.
     private var generation: Int64 = 0
 
     /// Active HTML-generation work item. Cancelled on file switch to avoid wasted work.
@@ -85,6 +91,11 @@ final class AppState {
 
     /// Active outline-parsing work item. Cancelled on new keystroke.
     private var pendingOutlineWork: DispatchWorkItem?
+
+    /// Re-entrancy guard for loadFileContent. Prevents double-loading when
+    /// the .onChange(of: selectedFileID) handler re-invokes loadFileContent
+    /// immediately after we set selectedFileID.
+    private var isOpeningFile = false
 
     /// Separate monotonically increasing counter for outline generation.
     /// Using the same generation counter as HTML would let stale outline
@@ -202,8 +213,6 @@ final class AppState {
     // MARK: - Open File
 
     func openFile(url: URL) {
-        let caller = Thread.callStackSymbols.dropFirst(2).prefix(4).joined(separator: "\n  ")
-        print("[AppState \(instanceID)] openFile: \(url.lastPathComponent)\n  caller:\n  \(caller)")
         guard url.pathExtension.lowercased() == "md" else {
             let alert = NSAlert()
             alert.messageText = "Unsupported file type"
@@ -214,14 +223,14 @@ final class AppState {
         }
 
         if let existing = openFiles.first(where: { $0.url == url }) {
-            selectFile(id: existing.id)
+            selectedFileID = existing.id
             return
         }
 
         let item = FileTreeItem(url: url, name: url.lastPathComponent, isDirectory: false, parentID: nil)
         openFiles.append(item)
         fileIndex[item.id] = item
-        loadFileContent(url: url, id: item.id)
+        selectedFileID = item.id
     }
 
     // MARK: - Open Folder
@@ -256,6 +265,7 @@ final class AppState {
             cachedContentHash.removeValue(forKey: item.url)
             fileContents.removeValue(forKey: item.url)
             fileSavedHashes.removeValue(forKey: item.url)
+            fileContentAccessOrder.removeAll { $0 == item.url }
             cachedHTML.removeValue(for: item.url)
         }
         openFiles.removeAll { $0.id == id }
@@ -308,29 +318,73 @@ final class AppState {
     /// Fast index of all available files by ID, rebuilt on structural changes.
     private var fileIndex: [String: FileTreeItem] = [:]
 
+    /// Flat file list for folder files, keyed by root folder ID.  Pre-computed
+    /// on structural changes (folder open/close, file add/remove) so that the
+    /// sidebar can render folder files with a flat ForEach, avoiding recursive
+    /// DisclosureGroup view-tree evaluation on every selection change.
+    private(set) var flatFolderFilesByFolder: [String: [FlatFolderFile]] = [:]
+
     private func rebuildFileIndex() {
         var index: [String: FileTreeItem] = [:]
+        var flatFiles: [String: [FlatFolderFile]] = [:]
+
         for item in openFiles { index[item.id] = item }
         for folder in rootFolders {
+            var flat: [FlatFolderFile] = []
+            collectFlatFiles(from: folder, depth: 0, into: &flat)
+            flatFiles[folder.id] = flat
             for item in folder.allMarkdownFiles { index[item.id] = item }
         }
         fileIndex = index
+        flatFolderFilesByFolder = flatFiles
+    }
+
+    private func collectFlatFiles(from item: FileTreeItem, depth: Int, into result: inout [FlatFolderFile]) {
+        guard let children = item.children else { return }
+        for child in children {
+            if child.isDirectory {
+                collectFlatFiles(from: child, depth: depth + 1, into: &result)
+            } else {
+                result.append(FlatFolderFile(item: child, depth: depth))
+            }
+        }
+    }
+
+    /// Phase 1 of file switching — lightweight preparation that runs
+    /// synchronously inside `.onChange(of: selectedFileID)` to set
+    /// currentFileURL immediately (matching preview behavior) and
+    /// let the main thread process the next click event.
+    func prepareFileSwitch(to id: String) {
+        guard let item = fileIndex[id] else { return }
+        pendingHTMLWork?.cancel()
+        pendingHTMLWork = nil
+        pendingOutlineWork?.cancel()
+        pendingOutlineWork = nil
+        generation &+= 1
+        selectedFileURL = item.url
+        currentFileURL = item.url
     }
 
     func selectFile(id: String) {
-        // Don't guard against selectedFileID — the List(selection:) binding
-        // may already have set it before onChange fires. Always proceed
-        // to loadFileContent; it caches aggressively so re-selection is fast.
-        saveCurrentFileIfDirty()
-
+        // Note: saveCurrentFileIfDirty intentionally NOT called here to avoid
+        // blocking the main thread during rapid file switching. The previous
+        // file's dirty content is held in fileContents cache and saved when
+        // the file is closed, the window is closed, or Cmd+S is pressed.
         guard let item = fileIndex[id] else { return }
-
         loadFileContent(url: item.url, id: item.id)
     }
 
     // MARK: - Shared file loading (cancellation-aware)
 
     private func loadFileContent(url: URL, id: String) {
+        // Re-entrancy guard: setting selectedFileID below triggers
+        // .onChange → selectFile → loadFileContent again on the same
+        // call stack.  Return immediately so the second call is a no-op
+        // and we avoid double file-reads and generation races.
+        guard !isOpeningFile else { return }
+        isOpeningFile = true
+        defer { isOpeningFile = false }
+
         // Cancel any in-flight work for the previous file
         pendingHTMLWork?.cancel()
         pendingHTMLWork = nil
@@ -341,88 +395,87 @@ final class AppState {
         generation &+= 1
         let token = generation
 
-        // Signal loading state immediately — editor switches to new file at once
-        isLoadingFile = true
-        selectedFileID = id
         selectedFileURL = url
         currentFileURL = url
-        renderedHTML = ""
-        renderedBodyHTML = ""
 
         // Try cache FIRST — in-memory content cache (zero disk IO) then HTML cache.
         let cacheKey = quickHashForCacheCheck(url: url)
         if let cachedContent = fileContents[url],
-           fileSavedHashes[url] == cacheKey {
+            fileSavedHashes[url] == cacheKey {
             // In-memory content cache hit — same content as on disk.
             // Zero IO: content was kept from previous load or edit.
             if let cached = htmlCache.object(forKey: url as NSURL),
                cachedContentHash[url] == cacheKey {
-                // Full cache hit: content + HTML both cached
                 lastSavedContent = cachedContent
                 isFileDirty = false
-                isLoadingFile = false
-                currentFileContent = cachedContent
-                renderedHTML = cached.html
-                renderedBodyHTML = cached.bodyHTML
+                RunLoop.main.perform { [weak self] in
+                    guard let self, selectedFileID == id else { return }
+                    currentFileContent = cachedContent
+                    renderedHTML = cached.html
+                    renderedBodyHTML = cached.bodyHTML
+                }
                 return
             }
-            // Try secondary LRU cache (survives NSCache memory-pressure purges)
             if let cached = cachedHTML.value(for: url) {
                 lastSavedContent = cachedContent
                 isFileDirty = false
-                isLoadingFile = false
-                currentFileContent = cachedContent
-                renderedHTML = cached.html
-                renderedBodyHTML = cached.bodyHTML
+                RunLoop.main.perform { [weak self] in
+                    guard let self, selectedFileID == id else { return }
+                    currentFileContent = cachedContent
+                    renderedHTML = cached.html
+                    renderedBodyHTML = cached.bodyHTML
+                }
                 return
             }
-            // HTML cache miss — content ready, generate on background
             lastSavedContent = cachedContent
             isFileDirty = false
-            isLoadingFile = false
-            currentFileContent = cachedContent
+            RunLoop.main.perform { [weak self] in
+                guard let self, selectedFileID == id else { return }
+                currentFileContent = cachedContent
+            }
             startAsyncHTMLGeneration(content: cachedContent, url: url, token: token, cacheKey: cacheKey)
             return
         }
 
-        // Cache miss — read file and generate HTML on background in one pass,
-        // then swap both content + preview together in a single main-thread
-        // dispatch.  This cuts SwiftUI render passes from 3 to 2 (setup → data),
-        // eliminating the intermediate render where the editor shows content
-        // but the preview is blank.
+        // Cache miss — read file on background, update content first, then HTML
+        let isPreviewOnly = previewOnly
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self, token == self.generation else { return }
+            guard let self else { return }
 
             do {
                 let content = try FileService.readFile(at: url)
+
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    cacheFileContent(content, for: url, cacheKey: cacheKey)
+                    guard token == self.generation else { return }
+                    lastSavedContent = content
+                    isFileDirty = false
+                    currentFileContent = content
+                    if isPreviewOnly {
+                        let escaped = content
+                            .replacingOccurrences(of: "&", with: "&amp;")
+                            .replacingOccurrences(of: "<", with: "&lt;")
+                            .replacingOccurrences(of: ">", with: "&gt;")
+                        renderedBodyHTML = "<pre>" + escaped + "</pre>"
+                    }
+                }
+
                 let (bodyHTML, fullHTML) = MarkdownParser.parseToHTML(content)
 
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, token == self.generation else { return }
-                    // Cache for future switches (even if navigation changed
-                    // during this async block, the next switch is zero-IO).
-                    if let _ = fileContents[url] {
-                        // Already cached by a more recent operation
-                    } else {
-                        cacheFileContent(content, for: url, cacheKey: cacheKey)
-                    }
-
-                    lastSavedContent = content
-                    isFileDirty = false
-                    isLoadingFile = false
-                    currentFileContent = content
-
+                    guard let self else { return }
                     let cached = CachedHTML(html: fullHTML, bodyHTML: bodyHTML)
                     htmlCache.setObject(cached, forKey: url as NSURL, cost: fullHTML.utf8.count)
                     cachedContentHash[url] = cacheKey
                     cacheRenderedHTML(cached, for: url)
+                    guard token == self.generation else { return }
                     renderedHTML = fullHTML
                     renderedBodyHTML = bodyHTML
                 }
             } catch {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, token == self.generation else { return }
-                    self.isLoadingFile = false
                     self.openFiles.removeAll { $0.id == id }
                     let alert = NSAlert()
                     alert.messageText = "Cannot Open File"
@@ -637,6 +690,7 @@ final class AppState {
     private func removeFileFromFolder(rootFolderID: String, url: URL) {
         guard let idx = rootFolders.firstIndex(where: { $0.id == rootFolderID }) else { return }
         removeFileRecursively(from: &rootFolders[idx], url: url)
+        rebuildFileIndex()
         htmlCache.removeObject(forKey: url as NSURL)
         cachedContentHash.removeValue(forKey: url)
         fileContents.removeValue(forKey: url)
@@ -670,7 +724,7 @@ final class AppState {
         let newFile = FileTreeItem(url: url, name: name, isDirectory: false, parentID: rootFolderID)
 
         insertInTree(root: &rootFolders[idx], item: newFile, url: url)
-        fileIndex[newFile.id] = newFile
+        rebuildFileIndex()
     }
 
     private func insertInTree(root: inout FileTreeItem, item: FileTreeItem, url: URL) {

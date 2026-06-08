@@ -169,17 +169,15 @@ struct ContentView: View {
                 }
 
                 ToolbarItem(id: "outlineToggle", placement: .primaryAction) {
-                    if appState.selectedFileID != nil {
-                        Button {
-                            toggleOutline()
-                        } label: {
-                            Image(systemName: appState.isOutlineVisible
-                                  ? "list.bullet.indent.fill"
-                                  : "list.bullet.indent")
-                        }
-                        .help("Outline (⇧⌘O)")
-                        .foregroundStyle(appState.isOutlineVisible ? Color.accentColor : .secondary)
+                    Button {
+                        toggleOutline()
+                    } label: {
+                        Image(systemName: appState.isOutlineVisible
+                              ? "list.bullet.indent.fill"
+                              : "list.bullet.indent")
                     }
+                    .help("Outline (⇧⌘O)")
+                    .foregroundStyle(appState.isOutlineVisible ? Color.accentColor : .secondary)
                 }
 
                 ToolbarItem(id: "previewToggle", placement: .primaryAction) {
@@ -209,18 +207,16 @@ struct ContentView: View {
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .allowsHitTesting(false)
-            if appState.selectedFileID != nil {
-                Button("") { appState.closeCurrentFile() }
-                    .keyboardShortcut("w", modifiers: .command)
-                    .frame(width: 0, height: 0)
-                    .opacity(0)
-                    .allowsHitTesting(false)
-                Button("") { toggleContentWidth() }
-                    .keyboardShortcut("w", modifiers: [.command, .shift])
-                    .frame(width: 0, height: 0)
-                    .opacity(0)
-                    .allowsHitTesting(false)
-            }
+            Button("") { appState.closeCurrentFile() }
+                .keyboardShortcut("w", modifiers: .command)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .allowsHitTesting(false)
+            Button("") { toggleContentWidth() }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .allowsHitTesting(false)
             if appState.previewOnly {
                 Button("") { toggleOutline() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
@@ -231,17 +227,7 @@ struct ContentView: View {
         }
     }
 
-    private static let appearQueue = DispatchQueue(label: "appear-counter")
-    private static var appearCounter = 0
-
     private func onViewAppear() {
-        let seq = Self.appearQueue.sync { Self.appearCounter += 1; return Self.appearCounter }
-        let marker = "======================================================================"
-        print("[\(seq)] \(marker)")
-        print("[\(seq)] >>> onAppear  appState=\(appState.instanceID)")
-        print("[\(seq)]     keyWindow.title='\(NSApp.keyWindow?.title ?? "?")'")
-        print("[\(seq)]     FileOpenCoordinator.pending=\(FileOpenCoordinator.shared.pendingCount) batch=\(FileOpenCoordinator.shared.currentBatchValue)")
-
         ThemeManager.shared.applyCurrentTheme()
         if let appDelegate = NSApp.delegate as? AppDelegate,
            let window = NSApp.keyWindow {
@@ -255,17 +241,12 @@ struct ContentView: View {
         }
 
         let pending = FileOpenCoordinator.shared.claimFiles()
-        let pendingNames = pending.map { $0.lastPathComponent }.joined(separator: ", ")
-        print("[\(seq)]     claimFiles -> [\(pendingNames)]  (→ AppState \(appState.instanceID))")
-
         if !pending.isEmpty {
             for url in pending {
                 appState.openFile(url: url)
             }
         } else {
             let restored = SessionRestoreCoordinator.shared.claimNextFiles()
-            let restoredNames = restored.map { $0.lastPathComponent }.joined(separator: ", ")
-            print("[\(seq)]     sessionRestore -> [\(restoredNames)]  (→ AppState \(appState.instanceID))")
             for url in restored {
                 appState.openFile(url: url)
             }
@@ -274,10 +255,6 @@ struct ContentView: View {
         appState.windowSessionID = WindowSessionCoordinator.shared.register(
             files: appState.openFiles.map { $0.url }
         )
-
-        print("[\(seq)]     final files: \(appState.openFiles.map { $0.url.lastPathComponent })")
-        print("[\(seq)] <<< onAppear END")
-        print("[\(seq)] \(marker)")
     }
 
     private func toggleSearch() {
@@ -378,7 +355,7 @@ private struct PreviewWithFontSizeView: View {
             hasFile: appState.currentFileURL != nil,
             baseURL: appState.currentFileURL?.deletingLastPathComponent(),
             fileURL: appState.currentFileURL,
-            fileID: appState.selectedFileID,
+            fileID: appState.currentFileURL?.absoluteString,
             viewRefs: appState.viewRefs,
             previewContentWidth: appState.previewContentWidth,
             themeMode: themeMode,
