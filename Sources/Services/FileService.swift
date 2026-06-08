@@ -57,7 +57,16 @@ enum FileService {
             }
         }
 
+        sortChildren(of: &root)
         return root
+    }
+
+    private static func sortChildren(of item: inout FileTreeItem) {
+        item.children?.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        guard let children = item.children else { return }
+        for i in children.indices where children[i].isDirectory {
+            sortChildren(of: &item.children![i])
+        }
     }
 
     private static func appendToTree(root: inout FileTreeItem, item: FileTreeItem, parentURL: URL) {
@@ -87,11 +96,15 @@ enum FileService {
         return assetsURL
     }
 
+    private static let imageDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd_HHmmss"
+        return f
+    }()
+
     static func saveImage(_ data: Data, extension ext: String, relativeTo mdFileURL: URL) throws -> URL {
         let assetsURL = try ensureAssetsDirectory(for: mdFileURL)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd_HHmmss"
-        let timestamp = formatter.string(from: Date())
+        let timestamp = Self.imageDateFormatter.string(from: Date())
         let filename = "image_\(timestamp).\(ext)"
         let fileURL = assetsURL.appendingPathComponent(filename)
         try data.write(to: fileURL)

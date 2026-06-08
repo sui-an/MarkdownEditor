@@ -390,13 +390,13 @@ struct MarkdownTextView: NSViewRepresentable {
 
         if fontSize != coordinator.lastAppliedFontSize {
             coordinator.lastAppliedFontSize = fontSize
+            wrapper.lineNumberView.fontSize = max(8, fontSize - 3)
             textView.font = NSFont.systemFont(ofSize: fontSize)
             if let storage = textView.textStorage, storage.length > 0 {
                 storage.addAttribute(.font, value: NSFont.systemFont(ofSize: fontSize), range: NSRange(location: 0, length: storage.length))
             }
         }
 
-        // On file switch we know the text is different — skip O(n) string equality.
         let isFileSwitch = coordinator.lastFileURL != currentFileURL
 
         if !isFileSwitch {
@@ -411,8 +411,15 @@ struct MarkdownTextView: NSViewRepresentable {
                     return
                 }
             }
+        } else if textView.string == text {
+            // Cache hit on file switch — content identical, no replacement needed.
+            coordinator.lastFileURL = currentFileURL
+            coordinator.scheduleImageProcessing()
+            wrapper.lineNumberView.needsDisplay = true
+            return
         }
 
+        coordinator.hasInlineImages = text.contains("![")
         coordinator.suppressTextDidChange = true
         let selectedRange = textView.selectedRange()
         textView.string = text
@@ -444,6 +451,9 @@ struct MarkdownTextView: NSViewRepresentable {
         var suppressTextDidChange = false
         /// Tracks the last opened file URL so we can detect document switches.
         var lastFileURL: URL?
+        /// Cached flag: does the current file contain `![` (inline image syntax)?
+        /// Avoids O(n) string scan on every keystroke for files without images.
+        var hasInlineImages = false
         /// Tracks the last applied isDark value to deduplicate theme application.
         var lastAppliedIsDark: Bool?
         private var scrollMonitor: Any?
@@ -494,7 +504,12 @@ struct MarkdownTextView: NSViewRepresentable {
                     accumulatedScrollDelta = 0
                     return event
                 }
-                accumulatedScrollDelta += event.scrollingDeltaY
+                // Normalize scroll direction: trackpad (hasPreciseScrollingDeltas)
+                // and mouse wheel report opposite deltaY signs for "scroll up".
+                let delta = event.hasPreciseScrollingDeltas
+                    ? event.scrollingDeltaY
+                    : -event.scrollingDeltaY
+                accumulatedScrollDelta += delta
                 if abs(accumulatedScrollDelta) >= 0.5 {
                     parent.onFontSizeChange?(accumulatedScrollDelta < 0 ? 1 : -1)
                     accumulatedScrollDelta = 0
@@ -552,13 +567,19 @@ struct MarkdownTextView: NSViewRepresentable {
 
         func scheduleImageProcessing() {
             NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(processInlineImages), object: nil)
-            guard let textView, textView.string.contains("![") else { return }
+            guard hasInlineImages else { return }
+            // Capture the current file URL so processInlineImages can verify
+            // it hasn't changed when the delayed callback fires.
+            pendingImageProcessingURL = parent.currentFileURL
             perform(#selector(processInlineImages), with: nil, afterDelay: 0.2)
         }
 
+        private var pendingImageProcessingURL: URL?
+
         @objc private func processInlineImages() {
             guard let textView = textView,
-                  let textStorage = textView.textStorage as? MarkdownTextStorage else { return }
+                  let textStorage = textView.textStorage as? MarkdownTextStorage,
+                  parent.currentFileURL == pendingImageProcessingURL else { return }
 
             let text = textStorage.string
             let nsString = text as NSString

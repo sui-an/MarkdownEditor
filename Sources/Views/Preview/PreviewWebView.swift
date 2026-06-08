@@ -118,15 +118,15 @@ final class WebViewCache {
         _ = cachedMermaidJS
     }
 
-    private var cache: [UUID: WKWebView] = [:]
+    private var cache: [String: WKWebView] = [:]
     private var states: [ObjectIdentifier: WebViewState] = [:]
-    private var urlToFileID: [URL: UUID] = [:]
-    private var accessOrder: [UUID] = []
+    private var urlToFileID: [URL: String] = [:]
+    private var accessOrder: [String] = []
     private let maxEntries = 10
 
     /// Returns the WebView (and its state) for the given fileID.
     /// Creates a new WebView on first access. LRU evicts when over limit.
-    func webView(for fileID: UUID, url: URL) -> (WKWebView, WebViewState) {
+    func webView(for fileID: String, url: URL) -> (WKWebView, WebViewState) {
         urlToFileID[url] = fileID
 
         if let existing = cache[fileID] {
@@ -150,7 +150,7 @@ final class WebViewCache {
     }
 
     /// Remove cached WebView by fileID (file closed).
-    func remove(for fileID: UUID) {
+    func remove(for fileID: String) {
         guard let webView = cache.removeValue(forKey: fileID) else { return }
         states.removeValue(forKey: ObjectIdentifier(webView))
         accessOrder.removeAll { $0 == fileID }
@@ -163,7 +163,7 @@ final class WebViewCache {
         remove(for: fileID)
     }
 
-    private func touch(_ fileID: UUID) {
+    private func touch(_ fileID: String) {
         accessOrder.removeAll { $0 == fileID }
         accessOrder.append(fileID)
     }
@@ -242,7 +242,7 @@ struct PreviewWebView: NSViewRepresentable {
     let hasFile: Bool
     let baseURL: URL?
     let fileURL: URL?
-    let fileID: UUID?
+    let fileID: String?
     var viewRefs: ViewRefs?
     let previewContentWidth: Int
     var themeMode: String = "system"

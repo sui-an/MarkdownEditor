@@ -107,6 +107,10 @@ final class MarkdownTextStorage: NSTextStorage {
     }
 
     func rehighlightAll(isDark: Bool) {
+        performRehighlight(isDark: isDark)
+    }
+
+    private func performRehighlight(isDark: Bool) {
         let length = backingStore.length
         guard length > 0 else { return }
 
@@ -230,7 +234,9 @@ final class MarkdownTextStorage: NSTextStorage {
         }
         for match in Self.strikeRegex.matches(in: text as String, range: searchRange) {
             if match.range(at: 1).location != NSNotFound {
-                backingStore.addAttribute(.foregroundColor, value: HighlightColors.strike(isDark), range: match.range(at: 1))
+                let r = match.range(at: 1)
+                backingStore.addAttribute(.foregroundColor, value: HighlightColors.strike(isDark), range: r)
+                backingStore.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: r)
             }
         }
     }

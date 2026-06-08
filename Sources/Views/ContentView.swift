@@ -210,8 +210,13 @@ struct ContentView: View {
                 .opacity(0)
                 .allowsHitTesting(false)
             if appState.selectedFileID != nil {
-                Button("") { toggleContentWidth() }
+                Button("") { appState.closeCurrentFile() }
                     .keyboardShortcut("w", modifiers: .command)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .allowsHitTesting(false)
+                Button("") { toggleContentWidth() }
+                    .keyboardShortcut("w", modifiers: [.command, .shift])
                     .frame(width: 0, height: 0)
                     .opacity(0)
                     .allowsHitTesting(false)
@@ -322,7 +327,13 @@ struct ContentView: View {
             headings: appState.outlineHeadings,
             textView: { [appState] in appState.viewRefs.textView },
             webView: { [appState] in appState.viewRefs.webView },
-            onClose: { [weak appState] in appState?.isOutlineVisible = false }
+            onClose: { [weak appState] in
+                appState?.isOutlineVisible = false
+                // Save panel frame for session persistence
+                if let frame = appState?.outlinePanel?.frame {
+                    UserDefaults.standard.set(NSStringFromRect(frame), forKey: "outlinePanelFrame")
+                }
+            }
         )
         appState.outlinePanel = panel
         if let mainWindow {

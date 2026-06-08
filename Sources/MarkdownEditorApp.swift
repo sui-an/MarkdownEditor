@@ -356,7 +356,8 @@ struct OpenFileCommand: View {
 
     private func openFileDialog() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [UTType.plainText, UTType.text]
+        let mdType = UTType(filenameExtension: "md") ?? .plainText
+        panel.allowedContentTypes = [mdType, UTType.plainText, UTType.text]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true

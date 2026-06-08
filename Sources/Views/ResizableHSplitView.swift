@@ -23,6 +23,7 @@ struct ResizableHSplitView<Left: View, Right: View>: View {
             let clampedLeft = max(minLeftWidth, min(raw, availableW - minRightWidth))
             let leftW = collapsed ? 0 : clampedLeft
             let rightW = collapsed ? w : (w - leftW - dividerW)
+            let lineX = collapsed ? 0 : leftW + (isDragging ? dragOffset : 0)
 
             HStack(spacing: 0) {
                 left
@@ -31,54 +32,53 @@ struct ResizableHSplitView<Left: View, Right: View>: View {
                     .opacity(collapsed ? 0 : 1)
 
                 if !collapsed {
-                    // Divider sits directly in HStack layout flow — no offset/position
-                    // trickery, so onHover tracking area always matches visual position.
-                    ZStack {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        Rectangle()
-                            .fill(isActive ? Color.accentColor : Color(nsColor: .separatorColor))
-                            .opacity(isDragging ? 0.8 : isActive ? 0.6 : 0.5)
-                            .frame(width: isDragging ? 2 : 1)
-                            .allowsHitTesting(false)
-                    }
-                    .frame(width: dividerW)
-                    .frame(maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                if !isDragging {
-                                    isDragging = true
-                                    dragOffset = 0
-                                    NSCursor.resizeLeftRight.push()
-                                }
-                                dragOffset = value.translation.width
-                            }
-                            .onEnded { value in
-                                let newRatio = ratio + value.translation.width / availableW
-                                ratio = max(
-                                    minLeftWidth / availableW,
-                                    min(newRatio, 1 - minRightWidth / availableW)
-                                )
-                                isDragging = false
-                                dragOffset = 0
+                    Color.clear
+                        .frame(width: dividerW)
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .onHover { hovering in
+                            isHovering = hovering
+                            if hovering {
+                                NSCursor.resizeLeftRight.push()
+                            } else if !isDragging {
                                 NSCursor.pop()
                             }
-                    )
-                    .onHover { hovering in
-                        isHovering = hovering
-                        if hovering {
-                            NSCursor.resizeLeftRight.push()
-                        } else {
-                            NSCursor.pop()
                         }
-                    }
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    if !isDragging {
+                                        isDragging = true
+                                        dragOffset = 0
+                                        NSCursor.resizeLeftRight.push()
+                                    }
+                                    dragOffset = value.translation.width
+                                }
+                                .onEnded { value in
+                                    let newRatio = ratio + value.translation.width / availableW
+                                    ratio = max(
+                                        minLeftWidth / availableW,
+                                        min(newRatio, 1 - minRightWidth / availableW)
+                                    )
+                                    isDragging = false
+                                    dragOffset = 0
+                                    NSCursor.pop()
+                                }
+                        )
                 }
 
                 right
                     .frame(width: rightW)
+            }
+            .overlay(alignment: .topLeading) {
+                if !collapsed {
+                    Rectangle()
+                        .fill(isActive ? Color.accentColor : Color(nsColor: .separatorColor))
+                        .opacity(isDragging ? 0.8 : isActive ? 0.6 : 0.5)
+                        .frame(width: isDragging ? 2 : 1)
+                        .offset(x: lineX)
+                        .allowsHitTesting(false)
+                }
             }
         }
     }

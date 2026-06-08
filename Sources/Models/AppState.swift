@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import AppKit
+import UniformTypeIdentifiers
 
 // MARK: - HTML Cache Entry
 
@@ -21,7 +22,7 @@ final class AppState {
     let instanceID = UUID().uuidString.prefix(8)
     var rootFolders: [FileTreeItem] = []
     var openFiles: [FileTreeItem] = []
-    var selectedFileID: UUID?
+    var selectedFileID: String?
     var currentFileContent: String = ""
     var currentFileURL: URL?
     var renderedHTML: String = ""
@@ -50,7 +51,7 @@ final class AppState {
     @ObservationIgnored var windowSessionID: UUID?
     @ObservationIgnored private var themeObserver: Any?
 
-    private var folderWatchers: [UUID: FolderWatcher] = [:]
+    private var folderWatchers: [String: FolderWatcher] = [:]
     private var selectedFileURL: URL?
     private var lastSavedContent: String = ""
 
@@ -124,13 +125,30 @@ final class AppState {
     func changeFontSize(by delta: CGFloat) {
         let newSize = max(9, min(72, fontSize + delta))
         guard newSize != fontSize else { return }
+        let oldSize = fontSize
         fontSize = newSize
         UserDefaults.standard.set(newSize, forKey: "editorFontSize")
+        // Register undo for Cmd+Z support
+        viewRefs.textView?.undoManager?.registerUndo(withTarget: self) { target in
+            target.changeFontSize(to: oldSize)
+        }
         // Update text view font and apply to all existing text immediately
         if let tv = viewRefs.textView {
             tv.font = NSFont.systemFont(ofSize: newSize)
             if let storage = tv.textStorage, storage.length > 0 {
                 storage.addAttribute(.font, value: NSFont.systemFont(ofSize: newSize), range: NSRange(location: 0, length: storage.length))
+            }
+            tv.needsDisplay = true
+        }
+    }
+
+    private func changeFontSize(to size: CGFloat) {
+        fontSize = size
+        UserDefaults.standard.set(size, forKey: "editorFontSize")
+        if let tv = viewRefs.textView {
+            tv.font = NSFont.systemFont(ofSize: size)
+            if let storage = tv.textStorage, storage.length > 0 {
+                storage.addAttribute(.font, value: NSFont.systemFont(ofSize: size), range: NSRange(location: 0, length: storage.length))
             }
             tv.needsDisplay = true
         }
@@ -150,7 +168,8 @@ final class AppState {
 
     func createNewNote() {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.plainText, .text]
+        let mdType = UTType(filenameExtension: "md") ?? .plainText
+        panel.allowedContentTypes = [mdType, .plainText, .text]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "Untitled.md"
         panel.title = "New Note"
@@ -185,7 +204,14 @@ final class AppState {
     func openFile(url: URL) {
         let caller = Thread.callStackSymbols.dropFirst(2).prefix(4).joined(separator: "\n  ")
         print("[AppState \(instanceID)] openFile: \(url.lastPathComponent)\n  caller:\n  \(caller)")
-        guard url.pathExtension.lowercased() == "md" else { return }
+        guard url.pathExtension.lowercased() == "md" else {
+            let alert = NSAlert()
+            alert.messageText = "Unsupported file type"
+            alert.informativeText = "MarkdownEditor only supports .md files."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
 
         if let existing = openFiles.first(where: { $0.url == url }) {
             selectFile(id: existing.id)
@@ -194,6 +220,7 @@ final class AppState {
 
         let item = FileTreeItem(url: url, name: url.lastPathComponent, isDirectory: false, parentID: nil)
         openFiles.append(item)
+        fileIndex[item.id] = item
         loadFileContent(url: url, id: item.id)
     }
 
@@ -205,6 +232,7 @@ final class AppState {
         do {
             let root = try FileService.scanDirectory(at: url)
             rootFolders.append(root)
+            rebuildFileIndex()
 
             let watcher = FolderWatcher(paths: [url.path]) { [weak self] changedURLs in
                 self?.handleFileSystemChanges(rootFolderID: root.id, urls: changedURLs)
@@ -222,7 +250,7 @@ final class AppState {
 
     // MARK: - Close File
 
-    func closeFile(id: UUID) {
+    func closeFile(id: String) {
         saveCurrentFileIfDirty()
         if let item = openFiles.first(where: { $0.id == id }) {
             cachedContentHash.removeValue(forKey: item.url)
@@ -231,15 +259,27 @@ final class AppState {
             cachedHTML.removeValue(for: item.url)
         }
         openFiles.removeAll { $0.id == id }
+        fileIndex.removeValue(forKey: id)
         if selectedFileID == id {
             clearSelection()
         }
         webViewCache.remove(for: id)
     }
 
+    /// Close the currently selected file. For folder files, just deselect.
+    func closeCurrentFile() {
+        guard let id = selectedFileID else { return }
+        if openFiles.contains(where: { $0.id == id }) {
+            closeFile(id: id)
+        } else {
+            // File belongs to a folder — just clear the selection
+            clearSelection()
+        }
+    }
+
     // MARK: - Remove Folder
 
-    func removeFolder(id: UUID) {
+    func removeFolder(id: String) {
         guard let idx = rootFolders.firstIndex(where: { $0.id == id }) else { return }
 
         let folder = rootFolders[idx]
@@ -260,25 +300,37 @@ final class AppState {
         folderWatchers[id]?.stop()
         folderWatchers.removeValue(forKey: id)
         rootFolders.remove(at: idx)
+        rebuildFileIndex()
     }
 
     // MARK: - Select File
 
-    func selectFile(id: UUID) {
+    /// Fast index of all available files by ID, rebuilt on structural changes.
+    private var fileIndex: [String: FileTreeItem] = [:]
+
+    private func rebuildFileIndex() {
+        var index: [String: FileTreeItem] = [:]
+        for item in openFiles { index[item.id] = item }
+        for folder in rootFolders {
+            for item in folder.allMarkdownFiles { index[item.id] = item }
+        }
+        fileIndex = index
+    }
+
+    func selectFile(id: String) {
         // Don't guard against selectedFileID — the List(selection:) binding
         // may already have set it before onChange fires. Always proceed
         // to loadFileContent; it caches aggressively so re-selection is fast.
         saveCurrentFileIfDirty()
 
-        let allItems = allAvailableFiles()
-        guard let item = allItems.first(where: { $0.id == id }) else { return }
+        guard let item = fileIndex[id] else { return }
 
         loadFileContent(url: item.url, id: item.id)
     }
 
     // MARK: - Shared file loading (cancellation-aware)
 
-    private func loadFileContent(url: URL, id: UUID) {
+    private func loadFileContent(url: URL, id: String) {
         // Cancel any in-flight work for the previous file
         pendingHTMLWork?.cancel()
         pendingHTMLWork = nil
@@ -315,7 +367,7 @@ final class AppState {
                 return
             }
             // Try secondary LRU cache (survives NSCache memory-pressure purges)
-            if let cached = cachedHTML[url] {
+            if let cached = cachedHTML.value(for: url) {
                 lastSavedContent = cachedContent
                 isFileDirty = false
                 isLoadingFile = false
@@ -410,12 +462,14 @@ final class AppState {
     // MARK: - Content Updates (editing)
 
     func updateContent(_ newContent: String) {
-        // currentFileContent is already set by the @Binding before onChange fires.
-        if let url = currentFileURL {
+        isFileDirty = newContent != lastSavedContent
+
+        // Only update cache on actual edits, not programmatic loads (file
+        // switches) where loadFileContent already cached the content.
+        if isFileDirty, let url = currentFileURL {
             let cacheKey = quickHashForCacheCheck(url: url)
             cacheFileContent(newContent, for: url, cacheKey: cacheKey)
         }
-        isFileDirty = newContent != lastSavedContent
 
         // Always refresh outline — even on file load (isFileDirty = false)
         refreshOutline(newContent)
@@ -516,14 +570,6 @@ final class AppState {
         renderedBodyHTML = ""
     }
 
-    func allAvailableFiles() -> [FileTreeItem] {
-        var all = openFiles
-        for folder in rootFolders {
-            all += folder.allMarkdownFiles
-        }
-        return all
-    }
-
     // MARK: - Cache helpers
 
     /// Fast file-modification check without reading content. Returns "" if file doesn't exist.
@@ -561,7 +607,7 @@ final class AppState {
 
     // MARK: - File System Changes
 
-    private func handleFileSystemChanges(rootFolderID: UUID, urls: [URL]) {
+    private func handleFileSystemChanges(rootFolderID: String, urls: [URL]) {
         guard let idx = rootFolders.firstIndex(where: { $0.id == rootFolderID }) else { return }
         let folderURL = rootFolders[idx].url
 
@@ -588,7 +634,7 @@ final class AppState {
         }
     }
 
-    private func removeFileFromFolder(rootFolderID: UUID, url: URL) {
+    private func removeFileFromFolder(rootFolderID: String, url: URL) {
         guard let idx = rootFolders.firstIndex(where: { $0.id == rootFolderID }) else { return }
         removeFileRecursively(from: &rootFolders[idx], url: url)
         htmlCache.removeObject(forKey: url as NSURL)
@@ -615,7 +661,7 @@ final class AppState {
         }
     }
 
-    private func addFileToFolder(rootFolderID: UUID, url: URL) {
+    private func addFileToFolder(rootFolderID: String, url: URL) {
         guard let idx = rootFolders.firstIndex(where: { $0.id == rootFolderID }) else { return }
         let existing = rootFolders[idx].allMarkdownFiles
         if existing.contains(where: { $0.url == url }) { return }
@@ -624,6 +670,7 @@ final class AppState {
         let newFile = FileTreeItem(url: url, name: name, isDirectory: false, parentID: rootFolderID)
 
         insertInTree(root: &rootFolders[idx], item: newFile, url: url)
+        fileIndex[newFile.id] = newFile
     }
 
     private func insertInTree(root: inout FileTreeItem, item: FileTreeItem, url: URL) {
@@ -661,6 +708,7 @@ final class AppState {
         cachedContentHash.removeAll()
         cachedHTML.removeAll()
         htmlCache.removeAllObjects()
+        fileIndex.removeAll()
         selectedFileID = nil
         selectedFileURL = nil
         currentFileURL = nil
@@ -688,20 +736,32 @@ final class AppState {
         alert.addButton(withTitle: "Keep Current")
         alert.alertStyle = .warning
 
-        if alert.runModal() == .alertFirstButtonReturn {
-            htmlCache.removeObject(forKey: url as NSURL)
-            cachedContentHash.removeValue(forKey: url)
-            do {
-                let content = try FileService.readFile(at: url)
-                let cacheKey = quickHashForCacheCheck(url: url)
-                cacheFileContent(content, for: url, cacheKey: cacheKey)
-                currentFileContent = content
-                lastSavedContent = content
-                isFileDirty = false
-                regenerateHTML()
-            } catch {
-            print("Failed to reload externally-changed file: \(error)")
+        guard let window = viewRefs.textView?.window ?? NSApp.keyWindow else {
+            if alert.runModal() == .alertFirstButtonReturn {
+                reloadExternallyChangedFile(url: url)
+            }
+            return
         }
+
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.reloadExternallyChangedFile(url: url)
+        }
+    }
+
+    private func reloadExternallyChangedFile(url: URL) {
+        htmlCache.removeObject(forKey: url as NSURL)
+        cachedContentHash.removeValue(forKey: url)
+        do {
+            let content = try FileService.readFile(at: url)
+            let cacheKey = quickHashForCacheCheck(url: url)
+            cacheFileContent(content, for: url, cacheKey: cacheKey)
+            currentFileContent = content
+            lastSavedContent = content
+            isFileDirty = false
+            regenerateHTML()
+        } catch {
+            print("Failed to reload externally-changed file: \(error)")
         }
     }
 }

@@ -150,6 +150,7 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Views/Preview/PreviewSearchOverlay.swift"
   "$PROJECT_DIR/Sources/Views/Sidebar/FileRowView.swift"
   "$PROJECT_DIR/Sources/Views/Sidebar/FolderHeaderView.swift"
+  "$PROJECT_DIR/Sources/Views/Sidebar/FolderTreeView.swift"
   "$PROJECT_DIR/Sources/Views/Sidebar/SidebarView.swift"
 )
 

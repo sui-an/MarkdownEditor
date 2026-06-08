@@ -27,6 +27,12 @@ struct LRUCache<Key: Hashable, Value> {
         }
     }
 
+    mutating func value(for key: Key) -> Value? {
+        guard let v = storage[key] else { return nil }
+        touch(key)
+        return v
+    }
+
     @discardableResult
     mutating func removeValue(for key: Key) -> Value? {
         accessOrder.removeAll { $0 == key }

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct SidebarView: View {
     let appState: AppState
@@ -29,20 +30,7 @@ struct SidebarView: View {
                 // Opened individual files
                 if !appState.openFiles.isEmpty {
                     Section("Opened Files") {
-                        ForEach(appState.openFiles) { item in
-                            FileRowView(
-                                item: item,
-                                isSelected: appState.selectedFileID == item.id
-                            )
-                            .contextMenu {
-                                Button("Reveal in Finder") {
-                                    NSWorkspace.shared.activateFileViewerSelecting([item.url])
-                                }
-                                Button("Close") {
-                                    appState.closeFile(id: item.id)
-                                }
-                            }
-                        }
+                        OpenFilesList(appState: appState)
                     }
                 }
 
@@ -57,17 +45,9 @@ struct SidebarView: View {
                         EmptyView()
                     }
 
-                    ForEach(folder.allMarkdownFiles) { file in
-                        FileRowView(
-                            item: file,
-                            isSelected: appState.selectedFileID == file.id
-                        )
-                        .padding(.leading, 4)
-                        .contextMenu {
-                            Button("Reveal in Finder") {
-                                NSWorkspace.shared.activateFileViewerSelecting([file.url])
-                            }
-                        }
+                    if let children = folder.children {
+                        FolderTreeView(items: children, appState: appState)
+                            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 0))
                     }
                 }
             }
@@ -83,7 +63,8 @@ struct SidebarView: View {
 
     private func openFileDialog() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.plainText, .text]
+        let mdType = UTType(filenameExtension: "md") ?? .plainText
+        panel.allowedContentTypes = [mdType, .plainText, .text]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
@@ -103,6 +84,30 @@ struct SidebarView: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         DispatchQueue.main.async {
             appState.openFolder(url: url)
+        }
+    }
+}
+
+// MARK: - Open Files List
+
+private struct OpenFilesList: View {
+    let appState: AppState
+
+    var body: some View {
+        ForEach(appState.openFiles) { item in
+            FileRowView(
+                item: item,
+                isSelected: appState.selectedFileID == item.id
+            )
+            .tag(item.id)
+            .contextMenu {
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([item.url])
+                }
+                Button("Close") {
+                    appState.closeFile(id: item.id)
+                }
+            }
         }
     }
 }

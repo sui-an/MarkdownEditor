@@ -24,15 +24,25 @@ final class OutlinePanelWindow: NSWindow {
 
         let panelWidth: CGFloat = 280
         let panelHeight: CGFloat = 650
+
         let appWindow = NSApp.mainWindow ?? NSApp.keyWindow
-        let windowFrame = appWindow?.frame ?? .zero
-        let origin = NSPoint(
-            x: windowFrame.maxX - panelWidth - 16,
-            y: windowFrame.maxY - panelHeight - 60
-        )
+
+        // Restore saved frame or compute default position
+        let panelFrame: NSRect
+        if let saved = UserDefaults.standard.string(forKey: "outlinePanelFrame") {
+            panelFrame = NSRectFromString(saved)
+        } else {
+            let windowFrame = appWindow?.frame ?? .zero
+            panelFrame = NSRect(
+                x: windowFrame.maxX - panelWidth - 16,
+                y: windowFrame.maxY - panelHeight - 60,
+                width: panelWidth,
+                height: panelHeight
+            )
+        }
 
         super.init(
-            contentRect: NSRect(origin: origin, size: NSSize(width: panelWidth, height: panelHeight)),
+            contentRect: panelFrame,
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -44,7 +54,7 @@ final class OutlinePanelWindow: NSWindow {
         contentView = hosting
         collectionBehavior = [.ignoresCycle]
         if let appWindow {
-            appWindow.addChildWindow(self, ordered: .above)
+            appWindow.addChildWindow(self, ordered: NSWindow.OrderingMode.above)
         }
         isReleasedWhenClosed = false
         orderFront(nil)

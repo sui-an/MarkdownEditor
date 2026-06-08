@@ -75,25 +75,35 @@ enum MarkdownParser {
         let hasBase64 = markdown.contains("data:image/")
 
         var mermaidResult: MermaidExtractResult?
-        let preprocessed: String
+        var codeBlocks: [(String, String)] = []
+        let processedForBase64: String
 
         if hasMermaid {
             let result = extractMermaidBlocks(markdown)
             mermaidResult = result
-            preprocessed = hasBase64 ? preprocessBase64Images(result.text) : result.text
-        } else if hasBase64 {
-            preprocessed = preprocessBase64Images(markdown)
+            processedForBase64 = result.text
         } else {
-            preprocessed = markdown
+            processedForBase64 = markdown
         }
 
-        let bodyHTML = renderBody(preprocessed)
+        // Extract all fenced code blocks so base64 preprocessing doesn't
+        // corrupt code examples that happen to contain image syntax.
+        let preprocessed: String
+        if hasBase64 {
+            let extracted = extractCodeBlocks(processedForBase64)
+            codeBlocks = extracted.blocks
+            preprocessed = preprocessBase64Images(extracted.text)
+        } else {
+            preprocessed = processedForBase64
+        }
+
+        let bodyHTML = renderBody(reinsertCodeBlocks(preprocessed, codeBlocks))
 
         let finalBody: String
         if let result = mermaidResult {
-            finalBody = injectHeadingIDs(reinsertMermaidBlocks(bodyHTML, result))
+            finalBody = wrapTables(injectHeadingIDs(reinsertMermaidBlocks(bodyHTML, result)))
         } else {
-            finalBody = injectHeadingIDs(bodyHTML)
+            finalBody = wrapTables(injectHeadingIDs(bodyHTML))
         }
 
         let css = Self.previewCSS
@@ -125,7 +135,7 @@ enum MarkdownParser {
         }
 
         // Attach GFM extensions registered by ensureGFMExtensions()
-        for name in ["table", "strikethrough", "tasklist", "autolink"] {
+        for name in ["table", "strikethrough", "tasklist", "autolink", "footnotes"] {
             if let ext = cmark_find_syntax_extension(name) {
                 cmark_parser_attach_syntax_extension(parser, ext)
             }
@@ -153,6 +163,54 @@ enum MarkdownParser {
     }
     #endif
 
+    /// Extract all fenced code blocks (```...```) so base64 preprocessing
+    /// doesn't corrupt code examples containing `![alt](data:...)` syntax.
+    private static let codeBlockExtractRegex: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: #"```(\w*)\s*\n([\s\S]*?)```"#,
+            options: .caseInsensitive
+        )
+    }()
+
+    private static func extractCodeBlocks(_ markdown: String) -> (text: String, blocks: [(String, String)]) {
+        var text = ""
+        var blocks: [(String, String)] = []
+        var lastEnd = 0
+        let nsText = markdown as NSString
+
+        let pattern = Self.codeBlockExtractRegex
+
+        for match in pattern.matches(in: markdown, range: NSRange(location: 0, length: nsText.length)) {
+            let full = match.range(at: 0)
+            let lang = match.range(at: 1)
+            let content = match.range(at: 2)
+
+            text += nsText.substring(with: NSRange(location: lastEnd, length: full.location - lastEnd))
+            let idx = blocks.count
+            text += "%%CODEBLOCK_\(idx)%%"
+            blocks.append((
+                nsText.substring(with: lang),
+                nsText.substring(with: content)
+            ))
+            lastEnd = full.location + full.length
+        }
+
+        if lastEnd < nsText.length {
+            text += nsText.substring(with: NSRange(location: lastEnd, length: nsText.length - lastEnd))
+        }
+
+        return (text, blocks)
+    }
+
+    private static func reinsertCodeBlocks(_ text: String, _ blocks: [(String, String)]) -> String {
+        var out = text
+        for (i, (lang, content)) in blocks.enumerated() {
+            let codeBlock = "```\(lang)\n\(content)```"
+            out = out.replacingOccurrences(of: "%%CODEBLOCK_\(i)%%", with: codeBlock)
+        }
+        return out
+    }
+
     // MARK: - Mermaid extraction
 
     private struct MermaidExtractResult {
@@ -160,16 +218,20 @@ enum MarkdownParser {
         let blocks: [String]
     }
 
+    private static let mermaidExtractRegex: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: #"```mermaid\s*\n([\s\S]*?)```"#,
+            options: .caseInsensitive
+        )
+    }()
+
     private static func extractMermaidBlocks(_ markdown: String) -> MermaidExtractResult {
         var text = ""
         var blocks: [String] = []
         var lastEnd = 0
         let nsText = markdown as NSString
 
-        let pattern = try! NSRegularExpression(
-            pattern: #"```mermaid\s*\n([\s\S]*?)```"#,
-            options: .caseInsensitive
-        )
+        let pattern = Self.mermaidExtractRegex
 
         for match in pattern.matches(in: markdown, range: NSRange(location: 0, length: nsText.length)) {
             let full = match.range(at: 0)
@@ -199,6 +261,21 @@ enum MarkdownParser {
         return out
     }
 
+    /// Wrap <table> in <div class="table-wrapper"> for horizontal scrolling.
+    private static func wrapTables(_ html: String) -> String {
+        html
+            .replacingOccurrences(of: "<table", with: "<div class=\"table-wrapper\"><table")
+            .replacingOccurrences(of: "</table>", with: "</table></div>")
+    }
+
+    /// Regex for heading tag matching (compiled once).
+    private static let headingTagRegex: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: #"<h([1-6])([^>]*)>(.*?)</h\1>"#,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        )
+    }()
+
     /// Inject id="heading-{slug}" into <h1>-<h6> tags for outline scroll sync.
     private static func injectHeadingIDs(_ html: String) -> String {
         // Fast-path: no heading tags → return unchanged.
@@ -206,13 +283,11 @@ enum MarkdownParser {
         guard hasHeadingTags(html) else { return html }
 
         let nsHTML = html as NSString
-        guard let regex = try? NSRegularExpression(
-            pattern: #"<h([1-6])([^>]*)>(.*?)</h\1>"#,
-            options: [.caseInsensitive, .dotMatchesLineSeparators]
-        ) else { return html }
+        let regex = Self.headingTagRegex
 
         var result = ""
         var lastEnd = 0
+        var slugCount: [String: Int] = [:]
         for match in regex.matches(in: html, range: NSRange(location: 0, length: nsHTML.length)) {
             let full = match.range(at: 0)
             let levelRange = match.range(at: 1)
@@ -228,7 +303,10 @@ enum MarkdownParser {
             // Strip any inline HTML tags from content for clean slug
             let plainText = content.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
             let slug = HeadingParser.slugify(plainText)
-            let idAttr = " id=\"heading-\(slug)\""
+            let count = slugCount[slug, default: 0]
+            slugCount[slug] = count + 1
+            let suffix = count > 0 ? "-\(count)" : ""
+            let idAttr = " id=\"heading-\(slug)\(suffix)\""
 
             result += "<h\(level)\(existingAttrs)\(idAttr)>\(content)</h\(level)>"
             lastEnd = full.location + full.length
@@ -344,6 +422,9 @@ enum MarkdownParser {
             --th-bg: #f5f5f7;
             --table-border: #ddd;
             --link-color: #007aff;
+            --search-bg: rgba(255, 200, 0, 0.45);
+            --search-current-bg: rgba(255, 150, 0, 0.7);
+            --search-current-outline: rgba(255, 150, 0, 0.8);
         }
         @media (prefers-color-scheme: dark) {
             :root {
@@ -356,6 +437,9 @@ enum MarkdownParser {
                 --th-bg: #333;
                 --table-border: #444;
                 --link-color: #6ea8fe;
+                --search-bg: rgba(255, 200, 0, 0.3);
+                --search-current-bg: rgba(255, 180, 0, 0.55);
+                --search-current-outline: rgba(255, 180, 0, 0.7);
             }
         }
         body {
@@ -432,12 +516,8 @@ enum MarkdownParser {
         strong { font-weight: 600; }
         em { font-style: italic; }
         del { text-decoration: line-through; opacity: 0.6; }
-        mark.search-result { background: rgba(255, 200, 0, 0.45); border-radius: 2px; }
-        mark.search-result.current-match { background: rgba(255, 150, 0, 0.7); border-radius: 2px; outline: 2px solid rgba(255, 150, 0, 0.8); }
-        @media (prefers-color-scheme: dark) {
-            mark.search-result { background: rgba(255, 200, 0, 0.3); }
-            mark.search-result.current-match { background: rgba(255, 180, 0, 0.55); outline: 2px solid rgba(255, 180, 0, 0.7); }
-        }
+        mark.search-result { background: var(--search-bg); border-radius: 2px; }
+        mark.search-result.current-match { background: var(--search-current-bg); border-radius: 2px; outline: 2px solid var(--search-current-outline); }
         .mermaid {
             text-align: center;
             margin: 20px 0;
@@ -445,6 +525,34 @@ enum MarkdownParser {
             background: transparent;
         }
         .mermaid svg { max-width: 100%; }
+        .table-wrapper { overflow-x: auto; margin: 12px 0; }
+        .table-wrapper table { margin: 0; }
+        .task-list-item { list-style: none; margin-left: -20px; }
+        .task-list-item input[type="checkbox"] {
+            appearance: none; width: 16px; height: 16px;
+            border: 1.5px solid var(--text-color); border-radius: 3px;
+            vertical-align: middle; margin-right: 6px;
+            background: transparent; cursor: default;
+        }
+        .task-list-item input[type="checkbox"]:checked {
+            background: var(--link-color); border-color: var(--link-color);
+        }
+        .task-list-item input[type="checkbox"]:checked::after {
+            content: "✓"; color: white; display: block;
+            text-align: center; font-size: 11px; line-height: 16px;
+        }
+        .footnotes { font-size: 0.85em; color: var(--blockquote-color); margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--table-border); }
+        .footnote-ref { font-size: 0.75em; vertical-align: super; }
+        kbd {
+            display: inline-block; padding: 2px 6px; font-size: 0.85em;
+            font-family: 'SF Mono', Menlo, monospace;
+            border: 1px solid var(--table-border); border-radius: 4px;
+            background: var(--code-bg);
+        }
+        details { margin: 8px 0; padding: 8px 12px; border: 1px solid var(--table-border); border-radius: 6px; }
+        summary { font-weight: 600; cursor: pointer; }
+        sup { font-size: 0.75em; vertical-align: super; }
+        sub { font-size: 0.75em; vertical-align: sub; }
 
         /* highlight.js theme — GitHub-inspired light/dark */
         .hljs-keyword, .hljs-selector-tag, .hljs-type { color: #d73a49; }

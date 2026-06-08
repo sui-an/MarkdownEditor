@@ -1,11 +1,11 @@
 import Foundation
 
 struct FileTreeItem: Identifiable, Hashable {
-    let id = UUID()
+    var id: String { url.path }
     let url: URL
     let name: String
     let isDirectory: Bool
-    let parentID: UUID?
+    let parentID: String?
 
     var children: [FileTreeItem]? = nil
 

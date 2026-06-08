@@ -9,7 +9,13 @@ final class LineNumberSideView: NSView {
         didSet { needsDisplay = true }
     }
 
-    private let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+    var fontSize: CGFloat = 10 {
+        didSet { needsDisplay = true }
+    }
+
+    private var font: NSFont {
+        NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
+    }
     private let textColor = NSColor.secondaryLabelColor
 
     // Newline position cache for O(log n) line number lookup
