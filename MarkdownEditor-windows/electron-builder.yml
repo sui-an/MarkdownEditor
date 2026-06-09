@@ -1,0 +1,34 @@
+appId: com.markdowneditor.windows
+productName: MarkdownEditor
+copyright: Copyright © 2026
+
+directories:
+  output: dist
+  buildResources: resources
+
+files:
+  - .vite/**/*
+  - "!node_modules/**/*"
+  - node_modules/**/*.js
+  - node_modules/**/*.json
+  - node_modules/**/*.node
+
+win:
+  icon: resources/icon.png
+  target:
+    - target: portable
+      arch:
+        - x64
+  artifactName: "${productName}-${version}.${ext}"
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
+extraResources:
+  - from: src/renderer/preview-assets/
+    to: preview-assets/
+    filter:
+      - "**/*"

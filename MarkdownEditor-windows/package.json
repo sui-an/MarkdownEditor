@@ -1,0 +1,37 @@
+{
+  "name": "markdown-editor-windows",
+  "version": "0.0.4",
+  "description": "MarkdownEditor for Windows (Electron port)",
+  "main": ".vite/build/main/index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "package": "npm run build && electron-builder --win",
+    "package:nsis": "npm run build && electron-builder --win --x64"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.8.1",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-javascript": "^6.2.2",
+    "@codemirror/lang-markdown": "^6.3.4",
+    "@codemirror/language": "^6.11.0",
+    "@codemirror/search": "^6.5.9",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/theme-one-dark": "^6.1.2",
+    "@codemirror/view": "^6.36.5",
+    "chokidar": "^3.6.0",
+    "codemirror": "^6.0.1",
+    "electron-store": "^8.2.0",
+    "marked": "^15.0.7",
+    "marked-highlight": "^2.2.1"
+  },
+  "devDependencies": {
+    "electron": "^33.4.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.2",
+    "vite-plugin-electron": "^1.0.4",
+    "vite-plugin-electron-renderer": "^0.14.6"
+  }
+}

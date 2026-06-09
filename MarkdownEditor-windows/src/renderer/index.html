@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self'">
+  <title>MarkdownEditor</title>
+  <link rel="stylesheet" href="styles/theme-vars.css" />
+  <link rel="stylesheet" href="styles/global.css" />
+  <link rel="stylesheet" href="styles/titlebar.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="titlebar">
+      <div id="window-controls">
+        <button class="window-btn close" id="btn-close"></button>
+        <button class="window-btn minimize" id="btn-minimize"></button>
+        <button class="window-btn maximize" id="btn-maximize"></button>
+      </div>
+      <div id="toolbar-left">
+        <button class="toolbar-btn" id="btn-sidebar-toggle" title="Toggle Sidebar">
+          <svg width="16" height="14" viewBox="0 0 16 14" fill="none">
+            <rect x="0.5" y="0.5" width="15" height="13" rx="1.5" stroke="currentColor"/>
+            <line x1="10.5" y1="1" x2="10.5" y2="13" stroke="currentColor"/>
+          </svg>
+        </button>
+        <button class="toolbar-btn" id="btn-new-note" title="New Note">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" stroke="currentColor" stroke-width="1" opacity="0.6"/>
+            <path d="M5.5 8h5M8 5.5v5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <span id="titlebar-text">MarkdownEditor</span>
+      <div id="toolbar-right">
+        <button class="toolbar-btn" id="btn-content-width" title="Content Width" style="display:none">
+          <svg width="16" height="14" viewBox="0 0 16 14" fill="none">
+            <rect x="1" y="2" width="14" height="10" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+            <line x1="8" y1="2" x2="8" y2="12" stroke="currentColor" stroke-width="1.2" opacity="0.3"/>
+          </svg>
+        </button>
+        <button class="toolbar-btn" id="btn-preview-toggle" title="Toggle Preview Only">
+          <svg width="16" height="14" viewBox="0 0 16 14" fill="none">
+            <rect x="0.5" y="0.5" width="6.5" height="13" rx="1" stroke="currentColor"/>
+            <rect x="9" y="0.5" width="6.5" height="13" rx="1" stroke="currentColor"/>
+          </svg>
+        </button>
+        <button class="toolbar-btn" id="btn-outline-toggle" title="Toggle Outline">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <rect x="1" y="1" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.3"/>
+            <rect x="1" y="5.75" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.6"/>
+            <rect x="1" y="10.5" width="12" height="2.5" rx="1" fill="currentColor"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div id="main-layout">
+      <div id="sidebar"></div>
+      <div id="divider-sidebar" class="divider" data-target="sidebar"></div>
+      <div id="content-area">
+        <div id="search-bar" style="display:none">
+          <input type="text" id="search-input" placeholder="Search..." spellcheck="false">
+          <span id="search-count"></span>
+          <button id="search-prev" title="Previous (Shift+Enter)">▲</button>
+          <button id="search-next" title="Next (Enter)">▼</button>
+          <button id="search-close" title="Close (Escape)">✕</button>
+        </div>
+        <div id="editor-pane">
+          <div id="no-file-overlay" class="no-file-overlay">
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+              <path d="M8 12a4 4 0 014-4h10.5a4 4 0 012.83 1.17l4.5 4.5A4 4 0 0031 16.5V36a4 4 0 01-4 4H12a4 4 0 01-4-4V12z" fill="currentColor" opacity="0.15"/>
+              <path d="M8 12a4 4 0 014-4h10.5a4 4 0 012.83 1.17l4.5 4.5A4 4 0 0031 16.5V36a4 4 0 01-4 4H12a4 4 0 01-4-4V12z" stroke="currentColor" stroke-width="1.5" opacity="0.3"/>
+            </svg>
+            <div class="no-file-title">No File Selected</div>
+            <div class="no-file-subtitle">Open a .md file or folder to begin editing</div>
+          </div>
+        </div>
+        <div id="divider-preview" class="divider" data-target="editor-preview"></div>
+        <div id="preview-pane"></div>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="./app.ts"></script>
+</body>
+</html>

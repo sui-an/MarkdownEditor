@@ -1,0 +1,102 @@
+#titlebar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: var(--titlebar-bg);
+  border-bottom: 1px solid var(--separator);
+  -webkit-app-region: drag;
+  padding: 0 6px;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+#window-controls {
+  display: flex;
+  gap: 7px;
+  padding: 0 4px;
+  -webkit-app-region: no-drag;
+}
+
+.window-btn {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.window-btn.close {
+  background: #ff5f57;
+}
+
+.window-btn.minimize {
+  background: #febc2e;
+}
+
+.window-btn.maximize {
+  background: #28c840;
+}
+
+.window-btn.close:hover { background: #e0493e; }
+.window-btn.minimize:hover { background: #e0a020; }
+.window-btn.maximize:hover { background: #1fa832; }
+
+#toolbar-left,
+#toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+#toolbar-left {
+  margin-left: 6px;
+}
+
+#toolbar-right {
+  margin-right: 2px;
+}
+
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0;
+  transition: background 0.1s, color 0.1s;
+}
+
+.toolbar-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.toolbar-btn:active {
+  opacity: 0.6;
+}
+
+.toolbar-btn.active {
+  background: var(--selected-bg);
+  color: var(--accent);
+}
+
+#titlebar-text {
+  flex: 1;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  opacity: 0.8;
+  -webkit-app-region: drag;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 8px;
+}

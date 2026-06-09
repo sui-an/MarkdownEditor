@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="preview.css">
+  <style id="theme-style"></style>
+</head>
+<body class="markdown-body">
+  <div id="md-content"></div>
+  <script src="./mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({ startOnLoad: true, theme: 'default' });
+    window.addEventListener('message', (event) => {
+      if (event.data.type === 'updateBody') {
+        document.getElementById('md-content').innerHTML = event.data.bodyHTML;
+        document.querySelectorAll('pre code').forEach((block) => {
+          try { hljs.highlightElement(block); } catch(e) {}
+        });
+        try { mermaid.run({ nodes: document.querySelectorAll('.mermaid') }); } catch(e) {}
+      }
+      if (event.data.type === 'setTheme') {
+        document.documentElement.classList.toggle('dark', event.data.isDark);
+      }
+    });
+  </script>
+</body>
+</html>
