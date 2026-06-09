@@ -1,6 +1,6 @@
 # MarkdownEditor
 
-A native macOS Markdown editor styled after Apple Notes, with live preview, syntax highlighting, Mermaid diagram support, and image drag-and-drop.
+A native Markdown editor with live preview, syntax highlighting, Mermaid diagram support, and image drag-and-drop. Available for macOS and Windows.
 
 <img width="1512" height="859" alt="PixPin_2026-05-27_20-56-07" src="https://github.com/user-attachments/assets/aef8956a-4654-4a88-a6e8-f2efb854fa28" />
 
@@ -31,6 +31,10 @@ A native macOS Markdown editor styled after Apple Notes, with live preview, synt
 - macOS 14.0 (Sonoma) or later
 - Apple Silicon (arm64) — Intel Macs are not currently supported
 
+### Windows
+
+- Windows 10 64-bit or later
+
 ## Installation
 
 ### Download DMG
@@ -42,7 +46,12 @@ A native macOS Markdown editor styled after Apple Notes, with live preview, synt
 > [!NOTE]
 > The app is ad-hoc code-signed. On first launch, you may need to right-click → Open to bypass Gatekeeper.
 
-### Build from source
+### Download EXE (Windows)
+
+1. Download the latest `MarkdownEditor.exe` from the [Releases](https://github.com/your-org/MarkdownEditor/releases) page
+2. Run the installer and follow the setup wizard
+
+### Build from source (macOS)
 
 ```bash
 # Clone the repository
@@ -60,6 +69,10 @@ bash package.sh
 ```
 
 The built app will be at `MarkdownEditor.app` and the DMG at `MarkdownEditor.dmg` in the project root.
+
+### Build from source (Windows)
+
+The Windows version source code is located in `MarkdownEditor-windows/`. Open the solution file in Visual Studio and build, or run the build script in that directory.
 
 ## Usage
 
@@ -104,6 +117,7 @@ Drag an image from Finder into the editor, or copy an image from another app and
 
 ```
 MarkdownEditor/
+├── MarkdownEditor-windows/          # Windows version source code
 ├── Sources/
 │   ├── MarkdownEditorApp.swift          # App entry, menu commands
 │   ├── Models/
