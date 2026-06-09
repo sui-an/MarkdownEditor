@@ -69,6 +69,27 @@ enum SearchJS {
         """
     }
 
+    /// Lightweight navigation: only updates the current-match class and scrolls,
+    /// without re-doing the full DOM walk. Called on every next/previous navigation.
+    /// query is needed to re-count because some marks may have been destroyed by
+    /// incremental body updates between navigations.
+    static func navigateTo(index: Int) -> String {
+        """
+        (function() {
+            var marks = document.querySelectorAll('mark.search-result');
+            marks.forEach(function(m, i) {
+                var isCurrent = (i === \(index));
+                m.className = 'search-result' + (isCurrent ? ' current-match' : '');
+                m.id = isCurrent ? 'search-current-match' : '';
+            });
+            if (\(index) >= 0 && \(index) < marks.length) {
+                marks[\(index)].scrollIntoView({ behavior: 'instant', block: 'center' });
+            }
+            return JSON.stringify({count: marks.length, currentIndex: \(index)});
+        })();
+        """
+    }
+
     static func clearHighlights() -> String {
         """
         document.querySelectorAll('mark.search-result').forEach(function(m) {

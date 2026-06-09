@@ -58,9 +58,9 @@ final class WebViewState: NSObject, WKNavigationDelegate {
     /// (tiny payload, <1ms) before deciding to inject 3.2MB mermaid.min.js.
     private func tryInjectMermaidInitial(_ webView: WKWebView) {
         guard !mermaidInjected, let mmdJS = WebViewCache.cachedMermaidJS else { return }
-        webView.evaluateJavaScript("document.querySelector('.mermaid') !== null") { [weak self] result, _ in
+        webView.evaluateJavaScript("document.querySelector('.mermaid') !== null") { [weak self] result, error in
             guard let self, let needsMermaid = result as? Bool, needsMermaid,
-                  !self.mermaidInjected else { return }
+                  !self.mermaidInjected, error == nil else { return }
             self.mermaidInjected = true
             self.doInjectMermaid(webView, mmdJS: mmdJS)
         }
@@ -73,7 +73,7 @@ final class WebViewState: NSObject, WKNavigationDelegate {
         guard let mmdJS = WebViewCache.cachedMermaidJS,
               lastBodyHTML.contains("mermaid") else { return }
         if mermaidInjected {
-            webView.evaluateJavaScript("mermaid.run({ querySelector: '.mermaid' })")
+            webView.evaluateJavaScript("try { mermaid.run({ querySelector: '.mermaid' }); } catch(e) {}")
             return
         }
         mermaidInjected = true
@@ -88,7 +88,11 @@ final class WebViewState: NSObject, WKNavigationDelegate {
             var s = document.createElement('script');
             s.textContent = \(literal);
             document.head.appendChild(s);
-            mermaid.run({ querySelector: '.mermaid' });
+            try {
+                mermaid.run({ querySelector: '.mermaid' });
+            } catch(e) {
+                console.error('mermaid.run error:', e);
+            }
         })();
         """)
     }

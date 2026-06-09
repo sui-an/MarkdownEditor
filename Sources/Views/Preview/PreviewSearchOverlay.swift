@@ -131,17 +131,19 @@ struct PreviewSearchOverlay: View {
     private func findNext() {
         guard totalMatches > 0 else { return }
         currentMatchIndex = (currentMatchIndex + 1) % totalMatches
-        highlightAndScroll(index: currentMatchIndex)
+        navigateToIndex()
     }
 
     private func findPrevious() {
         guard totalMatches > 0 else { return }
         currentMatchIndex = (currentMatchIndex - 1 + totalMatches) % totalMatches
-        highlightAndScroll(index: currentMatchIndex)
+        navigateToIndex()
     }
 
     // MARK: - JavaScript
 
+    /// Full search — rebuilds all <mark> elements from scratch.
+    /// Called only when the query text changes.
     private func highlightAndScroll(index: Int) {
         guard let wv = webView() else { return }
 
@@ -154,6 +156,21 @@ struct PreviewSearchOverlay: View {
             DispatchQueue.main.async {
                 totalMatches = count
                 if count == 0 { currentMatchIndex = 0 }
+            }
+        }
+    }
+
+    /// Lightweight navigation — only updates the current-match class and
+    /// scrolls into view, without re-building the DOM.
+    private func navigateToIndex() {
+        guard let wv = webView(), totalMatches > 0 else { return }
+        wv.evaluateJavaScript(SearchJS.navigateTo(index: currentMatchIndex)) { result, _ in
+            guard let jsonStr = result as? String,
+                  let data = jsonStr.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let count = json["count"] as? Int else { return }
+            DispatchQueue.main.async {
+                totalMatches = count
             }
         }
     }

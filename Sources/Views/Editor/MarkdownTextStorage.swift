@@ -15,9 +15,6 @@ final class MarkdownTextStorage: NSTextStorage {
     private static let blockquoteRegex = try! NSRegularExpression(
         pattern: #"^>\s.*$"#, options: .anchorsMatchLines
     )
-    private static let codeBlockRegex = try! NSRegularExpression(
-        pattern: #"(?m)^```[\s\S]*?^```"#, options: []
-    )
     private static let boldRegex = try! NSRegularExpression(
         pattern: #"\*\*(.+?)\*\*"#, options: []
     )
@@ -182,8 +179,37 @@ final class MarkdownTextStorage: NSTextStorage {
 
     private func highlightCodeBlocks(in text: NSString, length: Int, range: NSRange? = nil, isDark: Bool) {
         let searchRange = range ?? NSRange(location: 0, length: length)
-        for match in Self.codeBlockRegex.matches(in: text as String, range: searchRange) {
-            backingStore.addAttribute(.foregroundColor, value: HighlightColors.code(isDark), range: match.range)
+        let end = searchRange.location + searchRange.length
+        var pos = searchRange.location
+        var inCodeBlock = false
+        var codeBlockStart = 0
+
+        while pos < end {
+            let rest = end - pos
+            if rest >= 3,
+               text.character(at: pos) == 96,
+               text.character(at: pos + 1) == 96,
+               text.character(at: pos + 2) == 96 {
+                if !inCodeBlock {
+                    inCodeBlock = true
+                    codeBlockStart = pos
+                    pos += 3
+                    while pos < end && text.character(at: pos) != 10 { pos += 1 }
+                    if pos < end { pos += 1 }
+                    continue
+                } else {
+                    let blockEnd = pos + 3
+                    backingStore.addAttribute(.foregroundColor, value: HighlightColors.code(isDark), range: NSRange(location: codeBlockStart, length: blockEnd - codeBlockStart))
+                    inCodeBlock = false
+                    pos += 3
+                    continue
+                }
+            }
+            while pos < end && text.character(at: pos) != 10 { pos += 1 }
+            if pos < end { pos += 1 }
+        }
+        if inCodeBlock {
+            backingStore.addAttribute(.foregroundColor, value: HighlightColors.code(isDark), range: NSRange(location: codeBlockStart, length: end - codeBlockStart))
         }
     }
 

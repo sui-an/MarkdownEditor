@@ -43,14 +43,23 @@ final class SearchState {
         return "\(currentMatchIndex + 1)/\(matches.count)"
     }
 
+    /// Used by refreshHighlights to only update the two affected match ranges
+    /// instead of clearing and re-adding all highlights.
+    private var previousMatchIndex = -1
+
+    private static let matchNormalColor = NSColor(red: 1.0, green: 0.78, blue: 0.0, alpha: 0.45)
+    private static let matchCurrentColor = NSColor(red: 1.0, green: 0.59, blue: 0.0, alpha: 0.7)
+
     func findNext(textView: NSTextView?) {
         guard !matches.isEmpty else { return }
+        previousMatchIndex = currentMatchIndex
         currentMatchIndex = (currentMatchIndex + 1) % matches.count
         refreshHighlights(textView: textView)
     }
 
     func findPrevious(textView: NSTextView?) {
         guard !matches.isEmpty else { return }
+        previousMatchIndex = currentMatchIndex
         currentMatchIndex = (currentMatchIndex - 1 + matches.count) % matches.count
         refreshHighlights(textView: textView)
     }
@@ -58,8 +67,25 @@ final class SearchState {
     /// Refresh highlights to reflect the new current match index without
     /// re-running the full search.
     private func refreshHighlights(textView: NSTextView?) {
-        clearHighlights(textView: textView)
-        applyHighlights(textView: textView)
+        guard let storage = textView?.textStorage, !matches.isEmpty else { return }
+        if previousMatchIndex >= 0, previousMatchIndex < matches.count {
+            let range = matches[previousMatchIndex]
+            if range.location + range.length <= storage.length {
+                storage.addAttribute(.backgroundColor, value: Self.matchNormalColor, range: range)
+                for lm in storage.layoutManagers {
+                    lm.invalidateDisplay(forCharacterRange: range)
+                }
+            }
+        }
+        if currentMatchIndex >= 0, currentMatchIndex < matches.count {
+            let range = matches[currentMatchIndex]
+            if range.location + range.length <= storage.length {
+                storage.addAttribute(.backgroundColor, value: Self.matchCurrentColor, range: range)
+                for lm in storage.layoutManagers {
+                    lm.invalidateDisplay(forCharacterRange: range)
+                }
+            }
+        }
     }
 
     func replace(textView: NSTextView?) {
@@ -104,11 +130,7 @@ final class SearchState {
         let fullRange = NSRange(location: 0, length: storage.length)
         for (index, range) in matches.enumerated() {
             guard range.location + range.length <= storage.length else { continue }
-            if index == currentMatchIndex {
-                storage.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.7), range: range)
-            } else {
-                storage.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.35), range: range)
-            }
+            storage.addAttribute(.backgroundColor, value: index == currentMatchIndex ? Self.matchCurrentColor : Self.matchNormalColor, range: range)
         }
         for lm in storage.layoutManagers {
             lm.invalidateDisplay(forCharacterRange: fullRange)
@@ -139,6 +161,7 @@ final class SearchState {
         }
         matches = findMatches(in: text, for: query)
         currentMatchIndex = matches.isEmpty ? 0 : min(currentMatchIndex, matches.count - 1)
+        previousMatchIndex = -1
         applyHighlights(textView: effectiveTV)
     }
 

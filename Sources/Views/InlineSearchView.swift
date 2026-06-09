@@ -144,11 +144,12 @@ struct InlineSearchView: View {
                 .onSubmit {
                     if searchState.matches.isEmpty {
                         searchState.queryDidChange(textView: textView())
+                        highlightPreview()
                     } else {
                         searchState.findNext(textView: textView())
                         scrollToMatch()
+                        navigatePreview()
                     }
-                    highlightPreview()
                 }
                 .onChange(of: searchState.query) { _, _ in
                     searchState.queryDidChange(textView: textView())
@@ -187,7 +188,7 @@ struct InlineSearchView: View {
             Button {
                 searchState.findPrevious(textView: textView())
                 scrollToMatch()
-                highlightPreview()
+                navigatePreview()
             } label: {
                 Image(systemName: "chevron.up")
                     .font(.system(size: 9, weight: .medium))
@@ -198,7 +199,7 @@ struct InlineSearchView: View {
             Button {
                 searchState.findNext(textView: textView())
                 scrollToMatch()
-                highlightPreview()
+                navigatePreview()
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .medium))
@@ -294,15 +295,24 @@ struct InlineSearchView: View {
     private func scrollToMatch() {
         guard let range = searchState.currentMatchRange, let tv = textView() else { return }
         tv.scrollRangeToVisible(range)
-        tv.setSelectedRange(range)
+        tv.setSelectedRange(NSRange(location: range.location, length: 0))
     }
 
+    /// Full search on preview: re-builds all <mark> elements from scratch.
+    /// Called only when the query text actually changes.
     private func highlightPreview() {
         guard let wv = webView() else { return }
         let query = searchState.query
         let currentIdx = searchState.matches.isEmpty ? -1 : searchState.currentMatchIndex
         viewRefs?.lastSearchQuery = query
         wv.evaluateJavaScript(SearchJS.highlight(query: query, currentIndex: currentIdx))
+    }
+
+    /// Lightweight navigation: only updates the current-match class and scrolls
+    /// on the preview, without re-building the DOM. Called on every next/previous.
+    private func navigatePreview() {
+        guard let wv = webView(), !searchState.matches.isEmpty else { return }
+        wv.evaluateJavaScript(SearchJS.navigateTo(index: searchState.currentMatchIndex))
     }
 }
 

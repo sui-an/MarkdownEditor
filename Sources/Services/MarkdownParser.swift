@@ -264,9 +264,12 @@ enum MarkdownParser {
     private static func reinsertMermaidBlocks(_ html: String, _ result: MermaidExtractResult) -> String {
         var out = html
         for (i, block) in result.blocks.enumerated() {
-            // Do NOT HTML-escape mermaid content — angle brackets are valid
-            // diagram syntax (e.g. A-->B, A-->|text|B).
-            let div = "<div class=\"mermaid\">\n\(block)\n</div>"
+            // HTML-escape mermaid content to prevent HTML injection (e.g. </div>, <script>, etc.)
+            // that would break the WebView's DOM structure.
+            // Mermaid.js reads the diagram via element.textContent which decodes HTML entities,
+            // so angle brackets used in mermaid syntax (e.g. A-->B, A-->|text|B) are preserved.
+            let escaped = escapeHTML(block)
+            let div = "<div class=\"mermaid\">\n\(escaped)\n</div>"
             out = out.replacingOccurrences(of: "%%MERMAID_\(i)%%", with: div)
         }
         return out

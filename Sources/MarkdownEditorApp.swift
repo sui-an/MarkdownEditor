@@ -251,6 +251,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
+            // 先尝试恢复已最小化的窗口，符合 Dock 图标点击的常规预期
+            if let minimizedWindow = sender.windows.first(where: { $0.isMiniaturized }) {
+                minimizedWindow.deminiaturize(nil)
+                return true
+            }
             let windows = SessionRestoreService.restoreWindows()
             if !windows.isEmpty {
                 SessionRestoreCoordinator.shared.setWindows(windows)
@@ -270,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WindowManager.shared.createWindow()
             }
         }
-        return false
+        return true
     }
 }
 

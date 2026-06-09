@@ -97,7 +97,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<- PLIST
 	<key>CFBundleExecutable</key>
 	<string>$APP_NAME</string>
 	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
+	<string>AppIcon.icns</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.example.$APP_NAME</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -160,7 +160,7 @@ swiftc "${SWIFTC_FLAGS[@]}" \
 
 # 5. Copy resources
 echo "==> Copying resources ..."
-cp "$PROJECT_DIR/$APP_NAME.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+cp "$PROJECT_DIR/Resources/Assets.xcassets/AppIcon.appiconset/MarkdownEditor.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 cp "$MERMAID" "$APP_BUNDLE/Contents/Resources/mermaid.min.js"
 [ -f "$HLJS" ] && cp "$HLJS" "$APP_BUNDLE/Contents/Resources/highlight.min.js" || true
 
