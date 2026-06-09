@@ -29,6 +29,7 @@ final class WindowManager: NSObject {
     /// AppDelegate.focusedAppState (weak var) can silently become nil, causing
     /// menu commands and performKeyEquivalent handlers to do nothing.
     private var appStates: [NSWindow: AppState] = [:]
+    private let mainWindowFrameKey = "mainWindowFrame"
 
     func createWindow() {
         // Create a dedicated AppState for this window to guarantee isolation.
@@ -43,6 +44,20 @@ final class WindowManager: NSObject {
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
         window.delegate = self
+
+        // Restore saved frame, or center on screen if none exists
+        if let savedFrame = UserDefaults.standard.string(forKey: mainWindowFrameKey) {
+            let frame = NSRectFromString(savedFrame)
+            let screenFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+            if screenFrame.intersects(frame) {
+                window.setFrame(frame, display: false)
+            } else {
+                centerWindowOnScreen(window)
+            }
+        } else {
+            centerWindowOnScreen(window)
+        }
+
         // Strongly associate AppState with window so windowDidBecomeKey can
         // find it safely and focusedAppState (weak) stays non-nil.
         objc_setAssociatedObject(window, &AppDelegate.focusedStateHandle, appState, .OBJC_ASSOCIATION_RETAIN)
@@ -53,11 +68,28 @@ final class WindowManager: NSObject {
         appStates[window] = appState
         window.makeKeyAndOrderFront(nil)
     }
+
+    func saveMainWindowFrame() {
+        guard let window = windows.first else { return }
+        UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: mainWindowFrameKey)
+    }
+
+    private func centerWindowOnScreen(_ window: NSWindow) {
+        if let screen = window.screen ?? NSScreen.main {
+            let screenFrame = screen.visibleFrame
+            let windowFrame = window.frame
+            let x = screenFrame.origin.x + (screenFrame.width - windowFrame.width) / 2
+            let y = screenFrame.origin.y + (screenFrame.height - windowFrame.height) / 2
+            window.setFrameOrigin(NSPoint(x: x, y: y))
+        }
+    }
 }
 
 extension WindowManager: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
+        // Save window frame before closing
+        UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: mainWindowFrameKey)
         // Save dirty file before closing (since selectFile no longer saves
         // on each file switch, this ensures no edit is lost when quitting).
         appStates[window]?.saveCurrentFileIfDirty()
@@ -234,6 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        WindowManager.shared.saveMainWindowFrame()
         SessionRestoreService.clearOpenedFiles()
     }
 
