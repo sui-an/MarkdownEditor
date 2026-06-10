@@ -338,7 +338,7 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.font = NSFont.systemFont(ofSize: fontSize)
-        let paragraphStyle = NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
+        let paragraphStyle = (NSParagraphStyle.default.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
         paragraphStyle.defaultTabInterval = 28
         textView.defaultParagraphStyle = paragraphStyle
 
@@ -395,13 +395,27 @@ struct MarkdownTextView: NSViewRepresentable {
         let isFileSwitch = coordinator.lastFileURL != currentFileURL
 
         // Phase 1: file-switch (currentFileURL changed)
-        // text is still the *old* file's content.  Only lightweight ops.
         if isFileSwitch {
             coordinator.lastFileURL = currentFileURL
             coordinator.hasInlineImages = text.contains("![")
             coordinator.pendingContentLoad = true
             textView.undoManager?.removeAllActions()
-            if !text.isEmpty {
+            // Only update text when content actually changed (cache hit).
+            // Skip when text is still the previous file's content (cache miss)
+            // to avoid NSTextStorage re-layout flash.
+            if text != textView.string {
+                coordinator.suppressTextDidChange = true
+                textView.string = text
+                coordinator.suppressTextDidChange = false
+                textView.setSelectedRange(NSRange(location: 0, length: 0))
+            }
+            if text.isEmpty {
+                // Content not loaded yet (async in-flight). Phase 2 will
+                // set it when the async load completes.
+            } else {
+                coordinator.pendingContentLoad = false
+                coordinator.scheduleImageProcessing()
+                wrapper.lineNumberView.needsDisplay = true
                 scrollView.contentView.scroll(to: .zero)
                 scrollView.reflectScrolledClipView(scrollView.contentView)
             }

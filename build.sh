@@ -93,6 +93,23 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<- PLIST
 				<string>public.plain-text</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>HTML File</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>html</string>
+				<string>htm</string>
+			</array>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.html</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
 	<string>$APP_NAME</string>
@@ -148,9 +165,9 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Views/Editor/MarkdownTextView.swift"
   "$PROJECT_DIR/Sources/Views/Preview/PreviewWebView.swift"
   "$PROJECT_DIR/Sources/Views/Preview/PreviewSearchOverlay.swift"
+  "$PROJECT_DIR/Sources/Views/Sidebar/DirectoryRowView.swift"
   "$PROJECT_DIR/Sources/Views/Sidebar/FileRowView.swift"
   "$PROJECT_DIR/Sources/Views/Sidebar/FolderHeaderView.swift"
-  "$PROJECT_DIR/Sources/Views/Sidebar/FolderTreeView.swift"
   "$PROJECT_DIR/Sources/Views/Sidebar/SidebarView.swift"
 )
 

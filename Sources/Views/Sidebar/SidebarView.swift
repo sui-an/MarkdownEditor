@@ -37,32 +37,51 @@ struct SidebarView: View {
                 // Folders
                 ForEach(appState.rootFolders) { folder in
                     Section {
-                        FolderHeaderView(
-                            folder: folder,
-                            onRemove: { appState.removeFolder(id: folder.id) }
-                        )
-
                         let flatFiles = appState.flatFolderFilesByFolder[folder.id] ?? []
                         ForEach(flatFiles, id: \.item.id) { flatFile in
-                            FileRowView(
-                                item: flatFile.item,
-                                isSelected: appState.selectedFileID == flatFile.item.id
-                            )
-                            .padding(.leading, CGFloat(flatFile.depth * 12))
-                            .tag(flatFile.item.id)
-                            .contextMenu {
-                                Button("Reveal in Finder") {
-                                    NSWorkspace.shared.activateFileViewerSelecting([flatFile.item.url])
+                            if flatFile.item.isDirectory {
+                                DirectoryRowView(
+                                    item: flatFile.item,
+                                    depth: flatFile.depth,
+                                    isCollapsed: appState.collapsedFolderPaths.contains(flatFile.item.url.path),
+                                    isSelected: appState.selectedDirectoryID == flatFile.item.id,
+                                    onToggle: { appState.toggleFolderCollapsed(flatFile.item.url.path) },
+                                    onSelect: { appState.selectedDirectoryID = flatFile.item.id; appState.selectedFileID = nil }
+                                )
+                            } else {
+                                FileRowView(
+                                    item: flatFile.item,
+                                    isSelected: appState.selectedFileID == flatFile.item.id
+                                )
+                                .padding(.leading, CGFloat(flatFile.depth * 12))
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    appState.selectedDirectoryID = nil
+                                    appState.selectedFileID = flatFile.item.id
+                                }
+                                .tag(flatFile.item.id)
+                                .contextMenu {
+                                    Button("Reveal in Finder") {
+                                        NSWorkspace.shared.activateFileViewerSelecting([flatFile.item.url])
+                                    }
                                 }
                             }
                         }
                     } header: {
-                        EmptyView()
+                        FolderHeaderView(
+                            folder: folder,
+                            onRemove: { appState.removeFolder(id: folder.id) },
+                            onToggle: { appState.toggleFolderCollapsed(folder.url.path) },
+                            isSelected: appState.selectedDirectoryID == folder.id,
+                            onSelect: {
+                                appState.selectedDirectoryID = folder.id
+                                appState.selectedFileID = nil
+                            }
+                        )
                     }
                 }
             }
             .listStyle(.sidebar)
-            .listRowInsets(EdgeInsets())
         }
         .frame(minWidth: 180)
         .onChange(of: appState.selectedFileID) { _, newValue in
@@ -110,6 +129,11 @@ private struct OpenFilesList: View {
                 item: item,
                 isSelected: appState.selectedFileID == item.id
             )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                appState.selectedDirectoryID = nil
+                appState.selectedFileID = item.id
+            }
             .tag(item.id)
             .contextMenu {
                 Button("Reveal in Finder") {

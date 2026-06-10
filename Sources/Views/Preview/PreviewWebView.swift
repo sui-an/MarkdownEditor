@@ -16,6 +16,9 @@ final class WebViewState: NSObject, WKNavigationDelegate {
     /// True once mermaid.min.js has been injected into this WebView.
     /// Reset to false on page navigation (loadHTMLString).
     var mermaidInjected = false
+    /// True when the current file is an HTML file and scrollbar styling
+    /// should be applied after the page finishes loading.
+    var needsScrollbarStyle = false
     private var scrollerConfigured = false
 
     func configureScrollView(_ webView: WKWebView) {
@@ -48,6 +51,10 @@ final class WebViewState: NSObject, WKNavigationDelegate {
         if needsScrollReset {
             needsScrollReset = false
             webView.evaluateJavaScript("window.scrollTo(0, 0)")
+        }
+        if needsScrollbarStyle {
+            needsScrollbarStyle = false
+            injectScrollbarStyle(webView)
         }
         // Check if mermaid is needed (tiny evaluateJavaScript, no 3.2MB payload).
         // If the page has .mermaid elements, inject mermaid.min.js.
@@ -95,6 +102,64 @@ final class WebViewState: NSObject, WKNavigationDelegate {
             }
         })();
         """)
+    }
+
+    /// Configures the native NSScroller for HTML file preview (legacy style
+    /// + knob color matching the page background), and injects CSS scrollbar
+    /// styling as a visual refinement.
+    private func injectScrollbarStyle(_ webView: WKWebView) {
+        webView.evaluateJavaScript("""
+        (function() {
+            var bg = getComputedStyle(document.body).backgroundColor;
+            if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') {
+                bg = getComputedStyle(document.documentElement).backgroundColor;
+            }
+            return bg;
+        })();
+        """) { [weak self] result, _ in
+            guard let self else { return }
+            let isDark = self.isDarkCSSColor(result as? String ?? "")
+
+            // Configure native NSScroller: always-visible legacy style + matching knob
+            if let sv = findScrollView(in: webView) {
+                sv.scrollerStyle = .legacy
+                sv.verticalScroller?.knobStyle = isDark ? .light : .dark
+                sv.horizontalScroller?.knobStyle = isDark ? .light : .dark
+            }
+
+            // Also inject web-content scrollbar styling as a refinement
+            let thumb = isDark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.25)"
+            let thumbHover = isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.4)"
+            webView.evaluateJavaScript("""
+            (function() {
+                var id = 'md-scrollbar-style';
+                var el = document.getElementById(id);
+                if (!el) {
+                    el = document.createElement('style');
+                    el.id = id;
+                    document.head.appendChild(el);
+                }
+                el.textContent = '::-webkit-scrollbar { width: 8px; }' +
+                    '::-webkit-scrollbar-track { background: transparent; }' +
+                    '::-webkit-scrollbar-thumb { background: \(thumb); border-radius: 4px; }' +
+                    '::-webkit-scrollbar-thumb:hover { background: \(thumbHover); }';
+            })();
+            """)
+        }
+    }
+
+    /// Returns true when the CSS color string represents a dark color.
+    private func isDarkCSSColor(_ color: String) -> Bool {
+        let digits = color
+            .replacingOccurrences(of: "rgba", with: "")
+            .replacingOccurrences(of: "rgb", with: "")
+            .replacingOccurrences(of: "(", with: "")
+            .replacingOccurrences(of: ")", with: "")
+            .filter { $0.isNumber || $0 == "." || $0 == "," }
+        let components = digits.split(separator: ",").compactMap { Double($0) }
+        guard components.count >= 3 else { return false }
+        let luminance = 0.299 * components[0] + 0.587 * components[1] + 0.114 * components[2]
+        return luminance < 128
     }
 
     func updateBodyViaJS(_ webView: WKWebView, bodyHTML: String, baseURL: String? = nil, searchQuery: String = "") {
@@ -149,7 +214,9 @@ final class WebViewCache {
     private var sharedState: WebViewState?
 
     /// Returns the shared WebView (and its state). Creates on first access
-    /// with a preloaded CSS template so all content goes via `updateBodyViaJS`.
+    /// with the markdown preview template loaded. HTML files replace this
+    /// template via `loadHTMLString` in the HTML rendering path, and the
+    /// template is restored when switching back to a markdown file.
     func webView(for fileID: String, url: URL) -> (WKWebView, WebViewState) {
         if let wv = sharedWebView, let state = sharedState {
             return (wv, state)
@@ -242,6 +309,7 @@ struct PreviewWebView: NSViewRepresentable {
     let baseURL: URL?
     let fileURL: URL?
     let fileID: String?
+    let isHTMLFile: Bool
     var viewRefs: ViewRefs?
     let previewContentWidth: Int
     var themeMode: String = "system"
@@ -258,31 +326,23 @@ struct PreviewWebView: NSViewRepresentable {
 
     func updateNSView(_ container: NSView, context: Context) {
         guard hasFile, let fileID, let fileURL else {
-            if !container.subviews.isEmpty {
-                container.subviews.forEach { $0.removeFromSuperview() }
-            }
+            // Keep the WebView in the hierarchy to avoid re-inserting a
+            // stale shared WebView later.  Just hide the container.
+            container.isHidden = true
             context.coordinator.currentWebView = nil
             return
         }
 
         let (webView, state) = webViewCache.webView(for: fileID, url: fileURL)
 
-        // Theme change — @AppStorage triggers updateNSView directly
-        let isDark = ThemeManager.isDark(for: themeMode)
-        if context.coordinator.lastAppliedIsDark != isDark {
-            context.coordinator.lastAppliedIsDark = isDark
-            injectTheme(webView, isDark: isDark)
-        }
-
-        // Font size sync — scale preview body font proportionally to editor font
-        if context.coordinator.lastAppliedFontSize != fontSize {
-            context.coordinator.lastAppliedFontSize = fontSize
-            if state.hasLoadedContent {
-                injectFontSize(webView, fontSize: fontSize)
-            } else {
-                // Defer injection until the page actually finishes loading,
-                // avoiding evaluateJavaScript on an empty WKWebView.
-                state.pendingFontSize = fontSize
+        // Detect file type transition (HTML ↔ markdown) — reset for full page reload
+        if context.coordinator.lastIsHTMLFile != isHTMLFile {
+            context.coordinator.lastIsHTMLFile = isHTMLFile
+            state.hasLoadedContent = false
+            state.lastBodyHTML = ""
+            state.needsScrollbarStyle = false
+            if !isHTMLFile, let sv = findScrollView(in: webView) {
+                sv.scrollerStyle = .overlay
             }
         }
 
@@ -302,22 +362,42 @@ struct PreviewWebView: NSViewRepresentable {
             ])
 
             container.subviews.filter { $0 !== webView }.forEach { $0.removeFromSuperview() }
+        }
 
-            if state.hasLoadedContent {
-                // WebView already has the template loaded — avoid loadHTMLString
-                // (which causes a WKWebView page-reload flash). Just inject the body.
-                if !bodyHTML.isEmpty {
+        if isHTMLFile {
+            if !html.isEmpty {
+                if !state.hasLoadedContent || bodyHTML != state.lastBodyHTML {
                     state.lastBodyHTML = bodyHTML
-                    state.lastBaseURL = fileURL.deletingLastPathComponent().absoluteString
-                    state.lastSearchQuery = viewRefs?.lastSearchQuery ?? ""
-                    state.updateBodyViaJS(webView, bodyHTML: bodyHTML, baseURL: state.lastBaseURL, searchQuery: state.lastSearchQuery)
+                    state.hasLoadedContent = true
+                    state.needsScrollReset = true
+                    state.needsScrollbarStyle = true
+                    webView.loadHTMLString(html, baseURL: baseURL)
                 }
-            } else if !html.isEmpty {
-                state.hasLoadedContent = true
-                state.needsScrollReset = true
-                webView.loadHTMLString(html, baseURL: baseURL)
+                if context.coordinator.lastPreviewContentWidth != previewContentWidth {
+                    context.coordinator.lastPreviewContentWidth = previewContentWidth
+                    let (maxWidth, margin) = widthValues(previewContentWidth)
+                    webView.evaluateJavaScript("""
+                        document.body.style.maxWidth = "\(maxWidth)";
+                        document.body.style.margin = "\(margin)";
+                    """)
+                }
             }
         } else {
+            let isDark = ThemeManager.isDark(for: themeMode)
+            if context.coordinator.lastAppliedIsDark != isDark {
+                context.coordinator.lastAppliedIsDark = isDark
+                injectTheme(webView, isDark: isDark)
+            }
+
+            if context.coordinator.lastAppliedFontSize != fontSize {
+                context.coordinator.lastAppliedFontSize = fontSize
+                if state.hasLoadedContent {
+                    injectFontSize(webView, fontSize: fontSize)
+                } else {
+                    state.pendingFontSize = fontSize
+                }
+            }
+
             if state.hasLoadedContent {
                 if !bodyHTML.isEmpty && bodyHTML != state.lastBodyHTML {
                     state.lastBodyHTML = bodyHTML
@@ -325,7 +405,6 @@ struct PreviewWebView: NSViewRepresentable {
                     state.lastSearchQuery = viewRefs?.lastSearchQuery ?? ""
                     state.updateBodyViaJS(webView, bodyHTML: bodyHTML, baseURL: state.lastBaseURL, searchQuery: state.lastSearchQuery)
                 }
-                // Toggle content width based on previewContentWidth setting
                 if context.coordinator.lastPreviewContentWidth != previewContentWidth {
                     context.coordinator.lastPreviewContentWidth = previewContentWidth
                     let (maxWidth, margin) = widthValues(previewContentWidth)
@@ -337,9 +416,16 @@ struct PreviewWebView: NSViewRepresentable {
             } else if !html.isEmpty {
                 state.hasLoadedContent = true
                 state.needsScrollReset = true
+                if !bodyHTML.isEmpty {
+                    state.lastBodyHTML = bodyHTML
+                    state.lastBaseURL = fileURL.deletingLastPathComponent().absoluteString
+                    state.lastSearchQuery = viewRefs?.lastSearchQuery ?? ""
+                }
                 webView.loadHTMLString(html, baseURL: baseURL)
             }
         }
+
+        container.isHidden = false
     }
 
     static func dismantleNSView(_ container: NSView, coordinator: Coordinator) {
@@ -354,6 +440,7 @@ struct PreviewWebView: NSViewRepresentable {
         var lastPreviewContentWidth: Int?
         var lastAppliedIsDark: Bool?
         var lastAppliedFontSize: CGFloat?
+        var lastIsHTMLFile: Bool?
         private var themeObserver: Any?
 
         init() {

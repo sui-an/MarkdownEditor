@@ -78,7 +78,20 @@
   white-space: nowrap;
 }
 
+.folder-children-wrapper.collapsed {
+  display: none;
+}
+
 .folder-section {
+}
+
+.collapse-chevron {
+  font-size: 8px;
+  width: 12px;
+  text-align: center;
+  flex-shrink: 0;
+  opacity: 0.5;
+  user-select: none;
 }
 
 .folder-header {
@@ -121,7 +134,7 @@
   color: var(--text-secondary);
 }
 
-.folder-children .file-item {
+.folder-children-wrapper .file-item {
   padding-left: 24px !important;
 }
 

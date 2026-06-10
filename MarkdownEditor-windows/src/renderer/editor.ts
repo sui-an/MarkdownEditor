@@ -9,6 +9,7 @@ import { closeBrackets } from '@codemirror/autocomplete'
 
 const fontSizeCompartment = new Compartment()
 const themeCompartment = new Compartment()
+const languageCompartment = new Compartment()
 const setHighlight = StateEffect.define<DecorationSet>()
 const highlightField = StateField.define<DecorationSet>({
   create() { return Decoration.none },
@@ -93,7 +94,7 @@ export class Editor {
       extensions: [
         keymap.of([...defaultKeymap, ...historyKeymap]),
         history(),
-        markdown({ base: markdownLanguage }),
+        languageCompartment.of(markdown({ base: markdownLanguage })),
         macOSSyntaxTheme.of(syntaxHighlighting(macOSLightHighlight)),
         highlightSelectionMatches(),
         closeBrackets(),
@@ -160,6 +161,14 @@ export class Editor {
         annotations: Transaction.addToHistory.of(false),
       })
     }
+  }
+
+  setLanguage(isHtml: boolean): void {
+    this.view.dispatch({
+      effects: languageCompartment.reconfigure(
+        isHtml ? [] : markdown({ base: markdownLanguage })
+      ),
+    })
   }
 
   setFontSize(size: number): void {

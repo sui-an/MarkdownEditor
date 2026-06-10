@@ -5,6 +5,12 @@ struct EditorContainerView: View {
     var viewRefs: ViewRefs?
     var themeMode: String = "system"
 
+    /// True when there is enough content to show the editor — prevents
+    /// flashing stale content when state changes are batched by SwiftUI.
+    private var showEditor: Bool {
+        appState.hasValidContent
+    }
+
     var body: some View {
         ZStack {
                 MarkdownTextView(
@@ -20,9 +26,9 @@ struct EditorContainerView: View {
                 .onChange(of: appState.currentFileContent) { _, newValue in
                     appState.updateContent(newValue)
                 }
-                .opacity(appState.currentFileURL == nil ? 0 : 1)
+                .opacity(showEditor ? 1 : 0)
 
-                if appState.currentFileURL == nil {
+                if !showEditor {
                     VStack(spacing: 16) {
                         Image(systemName: "doc.text")
                             .font(.system(size: 48))
@@ -30,7 +36,7 @@ struct EditorContainerView: View {
                         Text("No File Selected")
                             .font(.title2)
                             .foregroundStyle(.secondary)
-                        Text("Open a .md file or folder to begin editing")
+                        Text("Open a .md or .html file to begin editing")
                             .font(.body)
                             .foregroundStyle(.tertiary)
                     }

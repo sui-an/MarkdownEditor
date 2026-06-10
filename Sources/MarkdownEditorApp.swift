@@ -394,12 +394,13 @@ struct OpenFileCommand: View {
     private func openFileDialog() {
         let panel = NSOpenPanel()
         let mdType = UTType(filenameExtension: "md") ?? .plainText
-        panel.allowedContentTypes = [mdType, UTType.plainText, UTType.text]
+        let htmlType = UTType.html
+        panel.allowedContentTypes = [mdType, htmlType, UTType.plainText, UTType.text]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.title = "Open Markdown File"
-        panel.message = "Select a .md file to edit"
+        panel.title = "Open File"
+        panel.message = "Select a .md or .html file to edit"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let state = focusedAppState()

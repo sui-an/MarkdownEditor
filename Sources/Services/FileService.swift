@@ -45,7 +45,7 @@ enum FileService {
                 )
                 dirCache[fileURL] = dirItem
                 appendToTree(root: &root, item: dirItem, parentURL: parentURL)
-            } else if fileURL.pathExtension.lowercased() == "md" {
+            } else if isSupportedFileExtension(fileURL.pathExtension) {
                 let fileItem = FileTreeItem(
                     url: fileURL,
                     name: itemName,
@@ -94,6 +94,13 @@ enum FileService {
             try fm.createDirectory(at: assetsURL, withIntermediateDirectories: true)
         }
         return assetsURL
+    }
+
+    static func isSupportedFileExtension(_ ext: String) -> Bool {
+        switch ext.lowercased() {
+        case "md", "markdown", "mkd", "html", "htm": return true
+        default: return false
+        }
     }
 
     private static let imageDateFormatter: DateFormatter = {

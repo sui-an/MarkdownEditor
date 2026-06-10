@@ -5,6 +5,7 @@ export class Preview {
   private container: HTMLElement
   private currentContent = ''
   private currentWidth = 0
+  private currentIsHtml = false
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -15,10 +16,11 @@ export class Preview {
     this.container.appendChild(this.iframe)
   }
 
-  update(content: string, contentWidth: number = 0): void {
+  update(content: string, contentWidth: number = 0, isHtml: boolean = false): void {
     this.currentContent = content
     this.currentWidth = contentWidth
-    const { fullHTML } = parseMarkdown(content, contentWidth)
+    this.currentIsHtml = isHtml
+    const { fullHTML } = parseMarkdown(content, contentWidth, isHtml)
     this.iframe.srcdoc = fullHTML
   }
 

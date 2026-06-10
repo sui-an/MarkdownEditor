@@ -32,6 +32,50 @@ enum HeadingParser {
         return buildTree(flat)
     }
 
+    /// Parse HTML headings (<h1>–<h6> tags). Strips inner HTML tags from titles
+    /// and estimates line number by counting newlines before the match position.
+    static func parseHTML(_ html: String) -> [HeadingItem] {
+        let cleaned = html.replacingOccurrences(
+            of: "<!--[\\s\\S]*?-->",
+            with: "",
+            options: .regularExpression
+        )
+
+        guard let pattern = try? NSRegularExpression(
+            pattern: "<h([1-6])(?:\\s[^>]*)?>(.*?)</h\\1>",
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else { return [] }
+
+        let nsRange = NSRange(cleaned.startIndex..<cleaned.endIndex, in: cleaned)
+        var flat: [HeadingItem] = []
+
+        pattern.enumerateMatches(in: cleaned, range: nsRange) { match, _, _ in
+            guard let match = match,
+                  match.numberOfRanges >= 3,
+                  let levelRange = Range(match.range(at: 1), in: cleaned),
+                  let contentRange = Range(match.range(at: 2), in: cleaned) else { return }
+
+            let level = Int(cleaned[levelRange]) ?? 1
+            guard level >= 1 && level <= 6 else { return }
+
+            let rawTitle = String(cleaned[contentRange])
+            let cleanTitle = rawTitle.replacingOccurrences(
+                of: "<[^>]+>",
+                with: "",
+                options: .regularExpression
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleanTitle.isEmpty else { return }
+
+            let beforeText = cleaned[..<contentRange.lowerBound]
+            let lineIndex = beforeText.filter { $0 == "\n" }.count
+
+            let slug = slugify(cleanTitle)
+            flat.append(HeadingItem(level: level, title: cleanTitle, lineIndex: lineIndex, slug: slug))
+        }
+
+        return buildTree(flat)
+    }
+
     /// Convert flat heading list into a hierarchical tree.
     private static func buildTree(_ items: [HeadingItem]) -> [HeadingItem] {
         var root: [HeadingItem] = []

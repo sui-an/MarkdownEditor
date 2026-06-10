@@ -15,6 +15,7 @@ export class Sidebar {
   private openFiles: FileTreeItem[] = []
   private rootFolders: FileTreeItem[] = []
   private ctxMenu: HTMLDivElement | null = null
+  private collapsedFolders: Set<string> = new Set()
 
   constructor(container: HTMLElement, callbacks: SidebarCallbacks) {
     this.container = container
@@ -123,6 +124,12 @@ export class Sidebar {
     })
 
     this.container.querySelectorAll('.folder-header, .subfolder-header').forEach(el => {
+      el.addEventListener('dblclick', (ev: Event) => {
+        ev.stopPropagation()
+        const path = (el as HTMLElement).dataset.path
+        if (!path) return
+        this.toggleFolder(path)
+      })
       el.addEventListener('contextmenu', (ev: Event) => {
         const id = (el as HTMLElement).dataset.id
         if (!id) return
@@ -132,6 +139,17 @@ export class Sidebar {
           { label: 'Show in File Explorer', action: () => this.callbacks.onShowInFolder(item.url) },
           { label: 'Close Folder', action: () => this.callbacks.onCloseFolder(id) },
         ])
+      })
+    })
+
+    this.container.querySelectorAll('.collapse-chevron').forEach(el => {
+      el.addEventListener('click', (ev: Event) => {
+        ev.stopPropagation()
+        const header = (el as HTMLElement).closest('.folder-header, .subfolder-header') as HTMLElement
+        if (!header) return
+        const path = header.dataset.path
+        if (!path) return
+        this.toggleFolder(path)
       })
     })
   }
@@ -148,6 +166,21 @@ export class Sidebar {
 
   private renderFolders(folders: FileTreeItem[], selectedID: string | null): string {
     return folders.map(f => this.renderFolderTree(f, selectedID, 0)).join('')
+  }
+
+  private escapeHtml(text: string): string {
+    const div = document.createElement('div')
+    div.textContent = text
+    return div.innerHTML
+  }
+
+  private toggleFolder(path: string): void {
+    if (this.collapsedFolders.has(path)) {
+      this.collapsedFolders.delete(path)
+    } else {
+      this.collapsedFolders.add(path)
+    }
+    this.render(this.openFiles, this.rootFolders, document.querySelector('.file-item.selected')?.getAttribute('data-id') ?? null)
   }
 
   private fileIcon(): string {
@@ -177,13 +210,15 @@ export class Sidebar {
   private renderFolderTree(item: FileTreeItem, selectedID: string | null, depth: number): string {
     if (item.isDirectory) {
       const children = item.children || []
+      const isCollapsed = this.collapsedFolders.has(item.url)
       return `
-        <div class="folder-section">
-          <div class="folder-header" style="padding-left: ${10 + depth * 14}px" data-id="${item.id}">
+        <div class="folder-section${isCollapsed ? ' collapsed' : ''}">
+          <div class="folder-header" data-id="${item.id}" data-path="${item.url}">
             ${this.folderIcon()}
-            <span class="folder-name">${item.name}</span>
+            <span class="folder-name">${this.escapeHtml(item.name)}</span>
+            <span class="collapse-chevron">${isCollapsed ? '▶' : '▼'}</span>
           </div>
-          ${children.map(c => this.renderTreeItem(c, selectedID, depth + 1)).join('')}
+          ${isCollapsed ? '' : children.map(c => this.renderTreeItem(c, selectedID, depth + 1)).join('')}
         </div>
       `
     }
@@ -193,13 +228,15 @@ export class Sidebar {
   private renderTreeItem(item: FileTreeItem, selectedID: string | null, depth: number): string {
     if (item.isDirectory) {
       const children = item.children || []
+      const isCollapsed = this.collapsedFolders.has(item.url)
       return `
-        <div class="folder-children">
-          <div class="subfolder-header" style="padding-left: ${8 + depth * 14}px" data-id="${item.id}">
+        <div class="folder-children-wrapper${isCollapsed ? ' collapsed' : ''}">
+          <div class="subfolder-header" data-id="${item.id}" data-path="${item.url}">
             ${this.folderIcon()}
-            <span class="folder-name">${item.name}</span>
+            <span class="folder-name">${this.escapeHtml(item.name)}</span>
+            <span class="collapse-chevron">${isCollapsed ? '▶' : '▼'}</span>
           </div>
-          ${children.map(c => this.renderTreeItem(c, selectedID, depth + 1)).join('')}
+          ${isCollapsed ? '' : children.map(c => this.renderTreeItem(c, selectedID, depth + 1)).join('')}
         </div>
       `
     }

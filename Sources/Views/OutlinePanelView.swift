@@ -132,7 +132,7 @@ private struct OutlinePanelContent: View {
     }
 
     private struct FlatHeading: Identifiable {
-        let id = UUID()
+        var id: String { "\(item.slug)-\(depth)" }
         let item: HeadingItem
         let depth: Int
     }
@@ -168,12 +168,21 @@ private struct OutlinePanelContent: View {
                 tv.showFindIndicator(for: lineRange)
             }
         }
-        // Scroll preview — use JSON encoder for safe JS string interpolation
-        if let wv = webView(),
-           let slugData = try? JSONEncoder().encode("heading-\(item.slug)"),
-           let slugJS = String(data: slugData, encoding: .utf8) {
+        // Scroll preview
+        if let wv = webView() {
+            let slugJS = String.jsLiteral("heading-\(item.slug)")
+            let titleJS = String.jsLiteral(item.title)
             wv.evaluateJavaScript("""
                 var el = document.getElementById(\(slugJS));
+                if (!el) {
+                    var headings = document.querySelectorAll('h1,h2,h3,h4,h5,h6');
+                    for (var i = 0; i < headings.length; i++) {
+                        if (headings[i].textContent.trim() === \(titleJS)) {
+                            el = headings[i];
+                            break;
+                        }
+                    }
+                }
                 if (el) {
                     el.scrollIntoView({behavior: 'smooth', block: 'start'});
                     el.style.transition = 'background-color 0.6s';

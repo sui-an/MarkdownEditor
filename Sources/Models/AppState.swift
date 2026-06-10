@@ -30,6 +30,7 @@ final class AppState {
     var rootFolders: [FileTreeItem] = []
     var openFiles: [FileTreeItem] = []
     var selectedFileID: String?
+    var selectedDirectoryID: String?
     var currentFileContent: String = ""
     var currentFileURL: URL?
     var renderedHTML: String = ""
@@ -45,6 +46,44 @@ final class AppState {
     var previewOnly = true
     var previewContentWidth = 0
     var sidebarVis = 0
+
+    /// Set of directory URL paths that are collapsed in the sidebar.
+    var collapsedFolderPaths: Set<String> = []
+
+    var isCurrentFileHTML: Bool {
+        guard let url = currentFileURL else { return false }
+        let ext = url.pathExtension.lowercased()
+        return ext == "html" || ext == "htm"
+    }
+
+    /// Returns true when the currently selected file still exists in the file index
+    /// (i.e. was not removed by a folder removal or structural change).
+    var isSelectedFileValid: Bool {
+        guard let id = selectedFileID else { return false }
+        return fileIndex[id] != nil
+    }
+
+    /// Consumer check: whether the content area should show file content.
+    /// Returns false only when a file IS selected but its ID no longer exists in the index.
+    var hasValidContent: Bool {
+        guard currentFileURL != nil else { return false }
+        if let id = selectedFileID, fileIndex[id] == nil { return false }
+        return true
+    }
+
+    /// Returns true when the currently selected directory still exists in any
+    /// remaining root folder tree.
+    var isSelectedDirectoryValid: Bool {
+        guard let id = selectedDirectoryID else { return false }
+        return rootFolders.contains { folder in itemExists(id: id, in: folder) }
+    }
+
+    /// Recursively searches for an item by ID in a folder tree.
+    private func itemExists(id: String, in item: FileTreeItem) -> Bool {
+        if item.id == id { return true }
+        guard let children = item.children else { return false }
+        return children.contains { itemExists(id: id, in: $0) }
+    }
 
     /// Per-window state migrated from ContentView's @State to eliminate
     /// cross-NSHostingController state sharing on macOS 14.
@@ -213,10 +252,11 @@ final class AppState {
     // MARK: - Open File
 
     func openFile(url: URL) {
-        guard url.pathExtension.lowercased() == "md" else {
+        let ext = url.pathExtension.lowercased()
+        guard FileService.isSupportedFileExtension(ext) else {
             let alert = NSAlert()
             alert.messageText = "Unsupported file type"
-            alert.informativeText = "MarkdownEditor only supports .md files."
+            alert.informativeText = "MarkdownEditor only supports .md and .html files."
             alert.addButton(withTitle: "OK")
             alert.runModal()
             return
@@ -273,7 +313,6 @@ final class AppState {
         if selectedFileID == id {
             clearSelection()
         }
-        webViewCache.remove(for: id)
     }
 
     /// Close the currently selected file. For folder files, just deselect.
@@ -294,14 +333,21 @@ final class AppState {
 
         let folder = rootFolders[idx]
 
-        if let selectedID = selectedFileID {
-            let fileIDs = folder.allMarkdownFiles.map { $0.id }
-            if fileIDs.contains(selectedID) {
-                clearSelection()
-            }
+        // Check whether the current selection falls inside the removed
+        // folder, using BOTH the tree-based lookup (fast path) and a
+        // URL-path-prefix fallback (handles files whose ids aren't in the
+        // tree structure, e.g. files added by openFile after folder scan).
+        let selectedWasInRemovedFolder: Bool
+        if let id = selectedFileID {
+            selectedWasInRemovedFolder = folder.containsFile(withID: id)
+                || (currentFileURL?.path.hasPrefix(folder.url.path + "/") ?? false)
+        } else if let url = currentFileURL {
+            selectedWasInRemovedFolder = url.path.hasPrefix(folder.url.path + "/")
+        } else {
+            selectedWasInRemovedFolder = false
         }
 
-        for file in folder.allMarkdownFiles {
+        for file in folder.allFiles {
             htmlCache.removeObject(forKey: file.url as NSURL)
             cachedContentHash.removeValue(forKey: file.url)
             cachedHTML.removeValue(for: file.url)
@@ -311,6 +357,22 @@ final class AppState {
         folderWatchers.removeValue(forKey: id)
         rootFolders.remove(at: idx)
         rebuildFileIndex()
+
+        // Only clear content when the selected file was inside the removed folder.
+        if selectedWasInRemovedFolder {
+            currentFileURL = nil
+            currentFileContent = ""
+            lastSavedContent = ""
+            isFileDirty = false
+            pendingHTMLWork?.cancel()
+            pendingHTMLWork = nil
+            renderedHTML = ""
+            renderedBodyHTML = ""
+            selectedFileID = nil
+        }
+        if !isSelectedDirectoryValid {
+            selectedDirectoryID = nil
+        }
     }
 
     // MARK: - Select File
@@ -331,23 +393,41 @@ final class AppState {
         for item in openFiles { index[item.id] = item }
         for folder in rootFolders {
             var flat: [FlatFolderFile] = []
-            collectFlatFiles(from: folder, depth: 0, into: &flat)
+            if !collapsedFolderPaths.contains(folder.url.path) {
+                collectFlatFiles(from: folder, depth: 0, into: &flat, collapsedPaths: collapsedFolderPaths)
+            }
             flatFiles[folder.id] = flat
-            for item in folder.allMarkdownFiles { index[item.id] = item }
+            for item in folder.allFiles where !index.keys.contains(item.id) { index[item.id] = item }
         }
         fileIndex = index
         flatFolderFilesByFolder = flatFiles
     }
 
-    private func collectFlatFiles(from item: FileTreeItem, depth: Int, into result: inout [FlatFolderFile]) {
+    /// Recursively flattens a directory tree into a list of files AND
+    /// directories.  Directories are included so the sidebar can render
+    /// collapse/expand controls at every level.  Children of a collapsed
+    /// directory are skipped and do not appear in the result.
+    private func collectFlatFiles(from item: FileTreeItem, depth: Int, into result: inout [FlatFolderFile], collapsedPaths: Set<String>) {
         guard let children = item.children else { return }
         for child in children {
             if child.isDirectory {
-                collectFlatFiles(from: child, depth: depth + 1, into: &result)
+                result.append(FlatFolderFile(item: child, depth: depth))
+                if !collapsedPaths.contains(child.url.path) {
+                    collectFlatFiles(from: child, depth: depth + 1, into: &result, collapsedPaths: collapsedPaths)
+                }
             } else {
                 result.append(FlatFolderFile(item: child, depth: depth))
             }
         }
+    }
+
+    func toggleFolderCollapsed(_ path: String) {
+        if collapsedFolderPaths.contains(path) {
+            collapsedFolderPaths.remove(path)
+        } else {
+            collapsedFolderPaths.insert(path)
+        }
+        rebuildFileIndex()
     }
 
     /// Phase 1 of file switching — lightweight preparation that runs
@@ -395,6 +475,24 @@ final class AppState {
         generation &+= 1
         let token = generation
 
+        // Save old URL before overwriting, for type-transition detection.
+        // Same-type transitions (markdown→markdown, HTML→HTML) can keep
+        // the old renderedHTML visible until async generation completes,
+        // avoiding a blank preview flash.  Different-type transitions
+        // (HTML→markdown, markdown→HTML) must clear the preview to
+        // prevent content-format leaking into the wrong template.
+        let oldURL = currentFileURL
+        let oldIsHTML: Bool
+        if let prev = oldURL {
+            let ext = prev.pathExtension.lowercased()
+            oldIsHTML = ext == "html" || ext == "htm"
+        } else {
+            oldIsHTML = false
+        }
+        let newExt = url.pathExtension.lowercased()
+        let newIsHTML = newExt == "html" || newExt == "htm"
+        let typeChanged = oldIsHTML != newIsHTML
+
         selectedFileURL = url
         currentFileURL = url
 
@@ -406,38 +504,53 @@ final class AppState {
             // Zero IO: content was kept from previous load or edit.
             if let cached = htmlCache.object(forKey: url as NSURL),
                cachedContentHash[url] == cacheKey {
-                lastSavedContent = cachedContent
-                isFileDirty = false
-                RunLoop.main.perform { [weak self] in
-                    guard let self, selectedFileID == id else { return }
+                renderedHTML = cached.html
+                renderedBodyHTML = cached.bodyHTML
+                // Defer editor-side state to next cycle so the sidebar
+                // highlight updates immediately (no same-cycle objectWillChange
+                // cascade from currentFileContent dragging sidebar re-eval).
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, token == self.generation else { return }
+                    lastSavedContent = cachedContent
+                    isFileDirty = false
                     currentFileContent = cachedContent
-                    renderedHTML = cached.html
-                    renderedBodyHTML = cached.bodyHTML
                 }
                 return
             }
             if let cached = cachedHTML.value(for: url) {
-                lastSavedContent = cachedContent
-                isFileDirty = false
-                RunLoop.main.perform { [weak self] in
-                    guard let self, selectedFileID == id else { return }
+                renderedHTML = cached.html
+                renderedBodyHTML = cached.bodyHTML
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, token == self.generation else { return }
+                    lastSavedContent = cachedContent
+                    isFileDirty = false
                     currentFileContent = cachedContent
-                    renderedHTML = cached.html
-                    renderedBodyHTML = cached.bodyHTML
                 }
                 return
             }
-            lastSavedContent = cachedContent
-            isFileDirty = false
-            RunLoop.main.perform { [weak self] in
-                guard let self, selectedFileID == id else { return }
+            // Content cached but HTML not — clear preview only on type
+            // transition to avoid stale-format leak, then generate async.
+            if typeChanged {
+                renderedHTML = ""
+                renderedBodyHTML = ""
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, token == self.generation else { return }
+                lastSavedContent = cachedContent
+                isFileDirty = false
                 currentFileContent = cachedContent
             }
             startAsyncHTMLGeneration(content: cachedContent, url: url, token: token, cacheKey: cacheKey)
             return
         }
 
-        // Cache miss — read file on background, update content first, then HTML
+        // Cache miss — clear stale preview only on TYPE TRANSITION.
+        // Same-type transitions keep the old rendered content visible
+        // (no flash) until the async disk-read + HTML generation completes.
+        if typeChanged {
+            renderedHTML = ""
+            renderedBodyHTML = ""
+        }
         let isPreviewOnly = previewOnly
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
@@ -459,6 +572,18 @@ final class AppState {
                             .replacingOccurrences(of: ">", with: "&gt;")
                         renderedBodyHTML = "<pre>" + escaped + "</pre>"
                     }
+                }
+
+                let ext = url.pathExtension.lowercased()
+                let isHTML = ext == "html" || ext == "htm"
+                if isHTML {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        guard token == self.generation else { return }
+                        renderedHTML = content
+                        renderedBodyHTML = content
+                    }
+                    return
                 }
 
                 let (bodyHTML, fullHTML) = MarkdownParser.parseToHTML(content)
@@ -500,6 +625,16 @@ final class AppState {
 
     /// Generate HTML from markdown content, cache it, and update rendered properties.
     private func generateAndCacheHTML(content: String, url: URL, token: Int64, cacheKey: String) {
+        let ext = url.pathExtension.lowercased()
+        let isHTML = ext == "html" || ext == "htm"
+        if isHTML {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, token == self.generation else { return }
+                renderedHTML = content
+                renderedBodyHTML = content
+            }
+            return
+        }
         let (bodyHTML, fullHTML) = MarkdownParser.parseToHTML(content)
         DispatchQueue.main.async { [weak self] in
             guard let self, token == self.generation else { return }
@@ -563,9 +698,12 @@ final class AppState {
         let token = outlineGeneration
         pendingOutlineWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            let headings = HeadingParser.parse(content)
+            guard let self else { return }
+            let ext = currentFileURL?.pathExtension.lowercased()
+            let isHTML = ext == "html" || ext == "htm"
+            let headings = isHTML ? HeadingParser.parseHTML(content) : HeadingParser.parse(content)
             DispatchQueue.main.async {
-                guard let self, token == self.outlineGeneration else { return }
+                guard token == self.outlineGeneration else { return }
                 self.outlineHeadings = headings
             }
         }
@@ -668,7 +806,7 @@ final class AppState {
             if !url.path.hasPrefix(folderURL.path + "/") && url.path != folderURL.path { continue }
             let ext = url.pathExtension.lowercased()
 
-            if ext == "md" {
+            if FileService.isSupportedFileExtension(ext) {
                 let fm = FileManager.default
                 if !fm.fileExists(atPath: url.path) {
                     removeFileFromFolder(rootFolderID: rootFolderID, url: url)
@@ -679,7 +817,10 @@ final class AppState {
 
             if selectedFileURL == url {
                 if FileManager.default.fileExists(atPath: url.path) {
-                    promptExternalChange(for: url)
+                    let cacheKey = quickHashForCacheCheck(url: url)
+                    if fileSavedHashes[url] != cacheKey {
+                        promptExternalChange(for: url)
+                    }
                 } else {
                     clearSelection()
                 }
@@ -697,7 +838,6 @@ final class AppState {
         fileSavedHashes.removeValue(forKey: url)
         fileContentAccessOrder.removeAll { $0 == url }
         cachedHTML.removeValue(for: url)
-        webViewCache.removeWebView(for: url)
     }
 
     private func removeFileRecursively(from item: inout FileTreeItem, url: URL) {
@@ -717,7 +857,7 @@ final class AppState {
 
     private func addFileToFolder(rootFolderID: String, url: URL) {
         guard let idx = rootFolders.firstIndex(where: { $0.id == rootFolderID }) else { return }
-        let existing = rootFolders[idx].allMarkdownFiles
+        let existing = rootFolders[idx].allFiles
         if existing.contains(where: { $0.url == url }) { return }
 
         let name = url.lastPathComponent
@@ -815,7 +955,13 @@ final class AppState {
             isFileDirty = false
             regenerateHTML()
         } catch {
-            print("Failed to reload externally-changed file: \(error)")
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Reload Failed"
+                alert.informativeText = "Could not reload \"\(url.lastPathComponent)\": \(error.localizedDescription)"
+                alert.alertStyle = .warning
+                alert.runModal()
+            }
         }
     }
 }

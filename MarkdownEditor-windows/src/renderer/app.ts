@@ -356,6 +356,7 @@ class App {
 
     if (this.state.selectedFileID && this.state.currentFilePath) {
       this.editor.setContent(this.state.currentFileContent)
+      this.editor.setLanguage(this.state.isHtmlFile)
       this.editor.setFontSize(this.state.fontSize)
       this.editor.setTheme(this.theme.isDark())
 
@@ -426,7 +427,7 @@ class App {
     const delay = content.length > 100000 ? 500 : 200
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null
-      this.preview.update(content, this.state.previewContentWidth)
+      this.preview.update(content, this.state.previewContentWidth, this.state.isHtmlFile)
     }, delay)
   }
 
@@ -441,14 +442,14 @@ class App {
   private cycleContentWidth(): void {
     this.state.previewContentWidth = (this.state.previewContentWidth + 1) % 3
     if (this.state.currentFileContent) {
-      this.preview.update(this.state.currentFileContent, this.state.previewContentWidth)
+      this.preview.update(this.state.currentFileContent, this.state.previewContentWidth, this.state.isHtmlFile)
     }
     this.syncUI()
   }
 
   private refreshPreview(): void {
     if (this.state.currentFileContent) {
-      this.preview.update(this.state.currentFileContent, this.state.previewContentWidth)
+      this.preview.update(this.state.currentFileContent, this.state.previewContentWidth, this.state.isHtmlFile)
     }
   }
 

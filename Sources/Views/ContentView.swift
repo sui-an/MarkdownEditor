@@ -278,7 +278,7 @@ struct ContentView: View {
     }
 
     private func toggleOutline() {
-        guard appState.selectedFileID != nil else { return }
+        guard appState.isSelectedFileValid else { return }
         if let panel = appState.outlinePanel, panel.isVisible {
             panel.orderOut(nil)
             appState.isOutlineVisible = false
@@ -328,7 +328,7 @@ struct ContentView: View {
     }
 
     private var windowTitle: String {
-        if let url = appState.currentFileURL {
+        if appState.isSelectedFileValid, let url = appState.currentFileURL {
             let base = url.lastPathComponent
             if appState.isFileDirty && !appState.previewOnly {
                 return "\(base) — Edited"
@@ -348,14 +348,22 @@ private struct PreviewWithFontSizeView: View {
     let themeMode: String
     let webViewCache: WebViewCache
 
+    /// Only show the preview when there is actual rendered content —
+    /// prevents flashing stale WebView content during file transitions.
+    private var showPreview: Bool {
+        guard appState.hasValidContent else { return false }
+        return !appState.renderedHTML.isEmpty || !appState.renderedBodyHTML.isEmpty
+    }
+
     var body: some View {
         PreviewWebView(
             html: appState.renderedHTML,
             bodyHTML: appState.renderedBodyHTML,
-            hasFile: appState.currentFileURL != nil,
+            hasFile: showPreview,
             baseURL: appState.currentFileURL?.deletingLastPathComponent(),
             fileURL: appState.currentFileURL,
             fileID: appState.currentFileURL?.absoluteString,
+            isHTMLFile: appState.isCurrentFileHTML,
             viewRefs: appState.viewRefs,
             previewContentWidth: appState.previewContentWidth,
             themeMode: themeMode,

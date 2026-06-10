@@ -24,7 +24,7 @@ export function registerIpcHandlers(): void {
     const result = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [
-        { name: 'Markdown', extensions: ['md', 'markdown', 'mkd'] },
+        { name: 'Markdown / HTML', extensions: ['md', 'markdown', 'mkd', 'html', 'htm'] },
         { name: 'All Files', extensions: ['*'] },
       ],
     })
@@ -43,6 +43,7 @@ export function registerIpcHandlers(): void {
       defaultPath: defaultName,
       filters: [
         { name: 'Markdown', extensions: ['md'] },
+        { name: 'HTML', extensions: ['html', 'htm'] },
         { name: 'All Files', extensions: ['*'] },
       ],
     })
@@ -168,7 +169,7 @@ async function scanDirectorySafe(dirPath: string): Promise<FileNode> {
       } catch {
         // Skip inaccessible subdirectories
       }
-    } else if (entry.name.endsWith('.md')) {
+    } else if (entry.name.endsWith('.md') || entry.name.endsWith('.html') || entry.name.endsWith('.htm')) {
       children.push({
         path: fullPath,
         name: entry.name,

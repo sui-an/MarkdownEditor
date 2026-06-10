@@ -30,10 +30,56 @@ function parseHeadings(content: string): Array<{ text: string; level: number; li
   return headings
 }
 
-export function parseMarkdown(content: string, contentWidth: number = 0): { bodyHTML: string; fullHTML: string } {
+function parseHTMLHeadings(html: string): Array<{ text: string; level: number; line: number }> {
+  const headings: Array<{ text: string; level: number; line: number }> = []
+  const cleaned = html.replace(/<!--[\s\S]*?-->/g, '')
+  const regex = /<h([1-6])(?:\s[^>]*)?>(.*?)<\/h\1>/gi
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(cleaned)) !== null) {
+    const level = parseInt(match[1], 10)
+    const rawTitle = match[2]
+    const text = rawTitle.replace(/<[^>]+>/g, '').trim()
+    if (!text) continue
+    const beforeText = cleaned.slice(0, match.index)
+    const line = beforeText.split('\n').length - 1
+    headings.push({ text, level, line })
+  }
+  return headings
+}
+
+export function parseMarkdown(content: string, contentWidth: number = 0, isHtml: boolean = false): { bodyHTML: string; fullHTML: string } {
+  const maxWidth = CONTENT_WIDTHS[contentWidth] || '720px'
+
+  if (isHtml) {
+    const headings = parseHTMLHeadings(content)
+    let bodyHTML = content
+    {
+      let hi = 0
+      bodyHTML = bodyHTML.replace(/<h([1-6])([^>]*)>/g, (_m, level, rest) => {
+        const line = hi < headings.length ? headings[hi].line : 0
+        hi++
+        return `<h${level} data-line="${line}"${rest}>`
+      })
+    }
+    const fullHTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="max-width:${maxWidth};margin:0">
+  <div id="md-content">${bodyHTML}</div>
+  <script>${searchJs}<\/script>
+  <script>
+    window.SearchJS = { highlight: window.SearchJS?.highlight, clearHighlights: window.SearchJS?.clearHighlights };
+  <\/script>
+</body>
+</html>`
+    return { bodyHTML, fullHTML }
+  }
+
   const headings = parseHeadings(content)
   let bodyHTML = marked.parse(content) as string
-  const maxWidth = CONTENT_WIDTHS[contentWidth] || '720px'
 
   {
     let hi = 0

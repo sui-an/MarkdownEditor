@@ -9,9 +9,14 @@ struct FileTreeItem: Identifiable, Hashable {
 
     var children: [FileTreeItem]? = nil
 
-    var allMarkdownFiles: [FileTreeItem] {
+    var allFiles: [FileTreeItem] {
         guard isDirectory else { return [self] }
-        return children?.flatMap { $0.allMarkdownFiles } ?? []
+        return children?.flatMap { $0.allFiles } ?? []
+    }
+
+    func containsFile(withID id: String) -> Bool {
+        if self.id == id { return true }
+        return children?.contains(where: { $0.containsFile(withID: id) }) ?? false
     }
 
     static func == (lhs: FileTreeItem, rhs: FileTreeItem) -> Bool {

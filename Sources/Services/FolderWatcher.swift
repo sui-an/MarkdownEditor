@@ -34,7 +34,8 @@ final class FolderWatcher {
         stream = FSEventStreamCreate(
             kCFAllocatorDefault,
             { (_, info, numEvents, rawPaths, _, _) in
-                let watcher = Unmanaged<FolderWatcher>.fromOpaque(info!).takeUnretainedValue()
+                guard let info else { return }
+                let watcher = Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue()
                 let pathList = rawPaths.assumingMemoryBound(to: UnsafeRawPointer.self)
                 let urls = (0..<numEvents).compactMap { i -> URL? in
                     let pathStr = String(cString: pathList[i].assumingMemoryBound(to: CChar.self))

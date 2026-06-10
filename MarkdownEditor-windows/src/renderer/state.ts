@@ -16,6 +16,7 @@ export class WindowState {
   themeMode: 'system' | 'light' | 'dark' = 'system'
   fontSize = 14
   isLoadingFile = false
+  isHtmlFile = false
 
   private folderWatcherIDs: Map<string, string> = new Map()
   private fileContentCache: Map<string, string> = new Map()
@@ -71,6 +72,7 @@ export class WindowState {
     this.selectedFileID = item.id
     this.currentFilePath = filePath
     this.currentFileContent = result.content!
+    this.isHtmlFile = filePath.endsWith('.html') || filePath.endsWith('.htm')
     this.isFileDirty = false
     this.notifyChange()
   }
@@ -165,6 +167,7 @@ export class WindowState {
     const item = this.findItem(id)
     if (item && !item.isDirectory) {
       this.currentFilePath = item.url
+      this.isHtmlFile = item.url.endsWith('.html') || item.url.endsWith('.htm')
       const cached = this.fileContentCache.get(item.url)
       if (cached !== undefined) {
         this.currentFileContent = cached
@@ -183,6 +186,7 @@ export class WindowState {
     if (result.success && result.content !== undefined) {
       this.currentFileContent = result.content
       this.fileContentCache.set(filePath, result.content)
+      this.isHtmlFile = filePath.endsWith('.html') || filePath.endsWith('.htm')
       this.outlineHeadings = this.parseHeadings(result.content)
       this.isFileDirty = false
     }
@@ -201,6 +205,9 @@ export class WindowState {
   }
 
   parseHeadings(content: string): HeadingItem[] {
+    if (this.isHtmlFile) {
+      return this.parseHTMLHeadings(content)
+    }
     const headings: HeadingItem[] = []
     const lines = content.split('\n')
     let inFence = false
@@ -231,6 +238,23 @@ export class WindowState {
       }
     }
 
+    return headings
+  }
+
+  private parseHTMLHeadings(html: string): HeadingItem[] {
+    const headings: HeadingItem[] = []
+    const cleaned = html.replace(/<!--[\s\S]*?-->/g, '')
+    const regex = /<h([1-6])(?:\s[^>]*)?>(.*?)<\/h\1>/gi
+    let match: RegExpExecArray | null
+    while ((match = regex.exec(cleaned)) !== null) {
+      const level = parseInt(match[1], 10) as 1 | 2 | 3 | 4 | 5 | 6
+      const rawTitle = match[2]
+      const text = rawTitle.replace(/<[^>]+>/g, '').trim()
+      if (!text) continue
+      const beforeText = cleaned.slice(0, match.index)
+      const position = beforeText.split('\n').length - 1
+      headings.push({ level, text, position })
+    }
     return headings
   }
 

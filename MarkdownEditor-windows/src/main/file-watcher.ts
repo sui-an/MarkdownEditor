@@ -14,9 +14,10 @@ export class FileWatcherManager {
       ignoreInitial: true,
     })
 
-    watcher.on('add', (fp) => { if (fp.endsWith('.md')) callback('add', fp) })
-    watcher.on('change', (fp) => { if (fp.endsWith('.md')) callback('change', fp) })
-    watcher.on('unlink', (fp) => { if (fp.endsWith('.md')) callback('unlink', fp) })
+    const isWatched = (fp: string) => fp.endsWith('.md') || fp.endsWith('.html') || fp.endsWith('.htm')
+    watcher.on('add', (fp) => { if (isWatched(fp)) callback('add', fp) })
+    watcher.on('change', (fp) => { if (isWatched(fp)) callback('change', fp) })
+    watcher.on('unlink', (fp) => { if (isWatched(fp)) callback('unlink', fp) })
     watcher.on('error', (err) => {
       console.error(`Watcher ${id} error for ${folderPath}:`, err)
     })
