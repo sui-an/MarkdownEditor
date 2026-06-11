@@ -55,10 +55,6 @@ struct SidebarView: View {
                                 )
                                 .padding(.leading, CGFloat(flatFile.depth * 12))
                                 .contentShape(Rectangle())
-                                .onTapGesture {
-                                    appState.selectedDirectoryID = nil
-                                    appState.selectedFileID = flatFile.item.id
-                                }
                                 .tag(flatFile.item.id)
                                 .contextMenu {
                                     Button("Reveal in Finder") {
@@ -87,6 +83,7 @@ struct SidebarView: View {
         .frame(minWidth: 180)
         .onChange(of: appState.selectedFileID) { _, newValue in
             guard let id = newValue else { return }
+            appState.selectedDirectoryID = nil
             appState.prepareFileSwitch(to: id)
             appState.selectFile(id: id)
         }
@@ -131,10 +128,6 @@ private struct OpenFilesList: View {
                 isSelected: appState.selectedFileID == item.id
             )
             .contentShape(Rectangle())
-            .onTapGesture {
-                appState.selectedDirectoryID = nil
-                appState.selectedFileID = item.id
-            }
             .tag(item.id)
             .contextMenu {
                 Button("Reload from Disk") {

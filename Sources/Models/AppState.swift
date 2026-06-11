@@ -511,9 +511,12 @@ final class AppState {
     }
 
     /// Phase 1 of file switching — lightweight preparation that runs
-    /// synchronously inside `.onChange(of: selectedFileID)` to set
-    /// currentFileURL immediately (matching preview behavior) and
-    /// let the main thread process the next click event.
+    /// synchronously inside `.onChange(of: selectedFileID)` to cancel
+    /// in-flight work and advance the generation counter so stale async
+    /// results from the previous file are discarded.
+    /// NOTE: currentFileURL is intentionally NOT set here — it must remain
+    /// pointing to the old file so loadFileContent can detect type transitions
+    /// (HTML ↔ markdown) and clear the preview accordingly.
     func prepareFileSwitch(to id: String) {
         guard let item = fileIndex[id] else { return }
         pendingHTMLWork?.cancel()
@@ -522,7 +525,6 @@ final class AppState {
         pendingOutlineWork = nil
         generation &+= 1
         selectedFileURL = item.url
-        currentFileURL = item.url
     }
 
     func selectFile(id: String) {

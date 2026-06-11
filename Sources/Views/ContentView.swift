@@ -348,11 +348,12 @@ private struct PreviewWithFontSizeView: View {
     let themeMode: String
     let webViewCache: WebViewCache
 
-    /// Only show the preview when there is actual rendered content —
-    /// prevents flashing stale WebView content during file transitions.
+    /// Show preview whenever a valid file is selected. During async content
+    /// loading (cache miss + type transition), renderedHTML is temporarily
+    /// empty, but we must keep the WebView container visible so the old page
+    /// stays on screen until the new content replaces it via loadHTMLString.
     private var showPreview: Bool {
-        guard appState.hasValidContent else { return false }
-        return !appState.renderedHTML.isEmpty || !appState.renderedBodyHTML.isEmpty
+        appState.hasValidContent
     }
 
     var body: some View {
