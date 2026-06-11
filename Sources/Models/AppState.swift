@@ -326,6 +326,29 @@ final class AppState {
         }
     }
 
+    // MARK: - Reload Folder
+
+    func reloadFolder(id: String) {
+        guard let idx = rootFolders.firstIndex(where: { $0.id == id }) else { return }
+        let folderURL = rootFolders[idx].url
+
+        let savedCollapsed = collapsedFolderPaths
+
+        guard let newRoot = try? FileService.scanDirectory(at: folderURL) else { return }
+
+        let updatedRoot = FileTreeItem(
+            url: newRoot.url,
+            name: newRoot.name,
+            isDirectory: true,
+            parentID: nil,
+            children: newRoot.children
+        )
+
+        rootFolders[idx] = updatedRoot
+        collapsedFolderPaths = savedCollapsed
+        rebuildFileIndex()
+    }
+
     // MARK: - Remove Folder
 
     func removeFolder(id: String) {

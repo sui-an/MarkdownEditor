@@ -4,6 +4,7 @@ import AppKit
 struct FolderHeaderView: View {
     let folder: FileTreeItem
     let onRemove: () -> Void
+    let onReload: () -> Void
     let onToggle: () -> Void
     let isSelected: Bool
     let onSelect: () -> Void
@@ -31,6 +32,8 @@ struct FolderHeaderView: View {
         .onTapGesture { onSelect() }
         .onTapGesture(count: 2) { onToggle() }
         .contextMenu {
+            Button("Reload from Disk") { onReload() }
+            Divider()
             Button("Remove Folder") { onRemove() }
         }
     }

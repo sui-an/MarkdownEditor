@@ -71,6 +71,7 @@ struct SidebarView: View {
                         FolderHeaderView(
                             folder: folder,
                             onRemove: { appState.removeFolder(id: folder.id) },
+                            onReload: { appState.reloadFolder(id: folder.id) },
                             onToggle: { appState.toggleFolderCollapsed(folder.url.path) },
                             isSelected: appState.selectedDirectoryID == folder.id,
                             onSelect: {
