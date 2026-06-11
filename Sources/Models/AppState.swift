@@ -297,6 +297,44 @@ final class AppState {
         }
     }
 
+    // MARK: - Reload File
+
+    func reloadFile(id: String) {
+        guard let item = openFiles.first(where: { $0.id == id }) else { return }
+        let url = item.url
+
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            let alert = NSAlert()
+            alert.messageText = "File Not Found"
+            alert.informativeText = "The file no longer exists on disk."
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
+
+        htmlCache.removeObject(forKey: url as NSURL)
+        cachedContentHash.removeValue(forKey: url)
+        cachedHTML.removeValue(for: url)
+
+        do {
+            let content = try FileService.readFile(at: url)
+            let cacheKey = quickHashForCacheCheck(url: url)
+            cacheFileContent(content, for: url, cacheKey: cacheKey)
+            if selectedFileID == id {
+                currentFileContent = content
+                lastSavedContent = content
+                isFileDirty = false
+                regenerateHTML()
+            }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Cannot Reload File"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
+    }
+
     // MARK: - Close File
 
     func closeFile(id: String) {
@@ -331,10 +369,29 @@ final class AppState {
     func reloadFolder(id: String) {
         guard let idx = rootFolders.firstIndex(where: { $0.id == id }) else { return }
         let folderURL = rootFolders[idx].url
+        let oldFolder = rootFolders[idx]
 
         let savedCollapsed = collapsedFolderPaths
 
-        guard let newRoot = try? FileService.scanDirectory(at: folderURL) else { return }
+        guard let newRoot = try? FileService.scanDirectory(at: folderURL) else {
+            let alert = NSAlert()
+            alert.messageText = "Cannot Reload Folder"
+            alert.informativeText = "Failed to read folder contents from disk."
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
+
+        let oldFiles = Set(oldFolder.allFiles.filter { !$0.isDirectory }.map { $0.url })
+        let newFiles = Set(newRoot.allFiles.filter { !$0.isDirectory }.map { $0.url })
+        for fileURL in oldFiles.subtracting(newFiles) {
+            htmlCache.removeObject(forKey: fileURL as NSURL)
+            cachedContentHash.removeValue(forKey: fileURL)
+            fileContents.removeValue(forKey: fileURL)
+            fileSavedHashes.removeValue(forKey: fileURL)
+            fileContentAccessOrder.removeAll { $0 == fileURL }
+            cachedHTML.removeValue(for: fileURL)
+        }
 
         let updatedRoot = FileTreeItem(
             url: newRoot.url,
@@ -825,6 +882,7 @@ final class AppState {
         guard let idx = rootFolders.firstIndex(where: { $0.id == rootFolderID }) else { return }
         let folderURL = rootFolders[idx].url
 
+        var didChange = false
         for url in urls {
             if !url.path.hasPrefix(folderURL.path + "/") && url.path != folderURL.path { continue }
             let ext = url.pathExtension.lowercased()
@@ -833,8 +891,10 @@ final class AppState {
                 let fm = FileManager.default
                 if !fm.fileExists(atPath: url.path) {
                     removeFileFromFolder(rootFolderID: rootFolderID, url: url)
+                    didChange = true
                 } else {
                     addFileToFolder(rootFolderID: rootFolderID, url: url)
+                    didChange = true
                 }
             }
 
@@ -849,12 +909,12 @@ final class AppState {
                 }
             }
         }
+        if didChange { rebuildFileIndex() }
     }
 
     private func removeFileFromFolder(rootFolderID: String, url: URL) {
         guard let idx = rootFolders.firstIndex(where: { $0.id == rootFolderID }) else { return }
         removeFileRecursively(from: &rootFolders[idx], url: url)
-        rebuildFileIndex()
         htmlCache.removeObject(forKey: url as NSURL)
         cachedContentHash.removeValue(forKey: url)
         fileContents.removeValue(forKey: url)
@@ -884,10 +944,20 @@ final class AppState {
         if existing.contains(where: { $0.url == url }) { return }
 
         let name = url.lastPathComponent
-        let newFile = FileTreeItem(url: url, name: name, isDirectory: false, parentID: rootFolderID)
+        let parentURL = url.deletingLastPathComponent()
+        let parentID = findParentID(in: rootFolders[idx], for: parentURL) ?? rootFolderID
+        let newFile = FileTreeItem(url: url, name: name, isDirectory: false, parentID: parentID)
 
         insertInTree(root: &rootFolders[idx], item: newFile, url: url)
-        rebuildFileIndex()
+    }
+
+    private func findParentID(in item: FileTreeItem, for url: URL) -> String? {
+        if item.url == url { return item.id }
+        guard let children = item.children else { return nil }
+        for child in children where child.isDirectory {
+            if let found = findParentID(in: child, for: url) { return found }
+        }
+        return nil
     }
 
     private func insertInTree(root: inout FileTreeItem, item: FileTreeItem, url: URL) {

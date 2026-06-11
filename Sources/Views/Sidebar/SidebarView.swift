@@ -137,9 +137,13 @@ private struct OpenFilesList: View {
             }
             .tag(item.id)
             .contextMenu {
+                Button("Reload from Disk") {
+                    appState.reloadFile(id: item.id)
+                }
                 Button("Reveal in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([item.url])
                 }
+                Divider()
                 Button("Close") {
                     appState.closeFile(id: item.id)
                 }

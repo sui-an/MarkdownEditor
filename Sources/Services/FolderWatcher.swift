@@ -27,7 +27,6 @@ final class FolderWatcher {
 
         let flags = FSEventStreamCreateFlags(
             kFSEventStreamCreateFlagFileEvents |
-            kFSEventStreamCreateFlagUseCFTypes |
             kFSEventStreamCreateFlagNoDefer
         )
 
