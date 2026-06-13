@@ -169,6 +169,7 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Views/Sidebar/FileRowView.swift"
   "$PROJECT_DIR/Sources/Views/Sidebar/FolderHeaderView.swift"
   "$PROJECT_DIR/Sources/Views/Sidebar/SidebarView.swift"
+  "$PROJECT_DIR/Sources/Views/Sidebar/RenamePopover.swift"
 )
 
 swiftc "${SWIFTC_FLAGS[@]}" \

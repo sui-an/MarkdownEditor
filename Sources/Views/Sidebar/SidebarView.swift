@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct SidebarView: View {
     let appState: AppState
+    @State private var renameTarget: RenameTarget?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,7 +31,7 @@ struct SidebarView: View {
                 // Opened individual files
                 if !appState.openFiles.isEmpty {
                     Section("Opened Files") {
-                        OpenFilesList(appState: appState)
+                        OpenFilesList(appState: appState, renameTarget: $renameTarget)
                     }
                 }
 
@@ -46,21 +47,18 @@ struct SidebarView: View {
                                     isCollapsed: appState.collapsedFolderPaths.contains(flatFile.item.url.path),
                                     isSelected: appState.selectedDirectoryID == flatFile.item.id,
                                     onToggle: { appState.toggleFolderCollapsed(flatFile.item.url.path) },
-                                    onSelect: { appState.selectedDirectoryID = flatFile.item.id; appState.selectedFileID = nil }
+                                    onSelect: { appState.selectedDirectoryID = flatFile.item.id; appState.selectedFileID = nil },
+                                    renameTarget: $renameTarget,
+                                    appState: appState
                                 )
                             } else {
-                                FileRowView(
+                                FolderFileRow(
                                     item: flatFile.item,
-                                    isSelected: appState.selectedFileID == flatFile.item.id
+                                    depth: flatFile.depth,
+                                    isSelected: appState.selectedFileID == flatFile.item.id,
+                                    renameTarget: $renameTarget,
+                                    appState: appState
                                 )
-                                .padding(.leading, CGFloat(flatFile.depth * 12))
-                                .contentShape(Rectangle())
-                                .tag(flatFile.item.id)
-                                .contextMenu {
-                                    Button("Reveal in Finder") {
-                                        NSWorkspace.shared.activateFileViewerSelecting([flatFile.item.url])
-                                    }
-                                }
                             }
                         }
                     } header: {
@@ -73,7 +71,9 @@ struct SidebarView: View {
                             onSelect: {
                                 appState.selectedDirectoryID = folder.id
                                 appState.selectedFileID = nil
-                            }
+                            },
+                            renameTarget: $renameTarget,
+                            appState: appState
                         )
                     }
                 }
@@ -87,6 +87,15 @@ struct SidebarView: View {
             appState.prepareFileSwitch(to: id)
             appState.selectFile(id: id)
         }
+    }
+
+    private func startRenaming(item: FileTreeItem) {
+        renameTarget = RenameTarget(
+            id: item.id,
+            name: item.name,
+            isDirectory: item.isDirectory,
+            parentURL: item.url.deletingLastPathComponent()
+        )
     }
 
     private func openFileDialog() {
@@ -116,30 +125,142 @@ struct SidebarView: View {
     }
 }
 
+// MARK: - Folder File Row (with rename popover)
+
+private struct FolderFileRow: View {
+    let item: FileTreeItem
+    let depth: Int
+    let isSelected: Bool
+    @Binding var renameTarget: RenameTarget?
+    let appState: AppState
+
+    private var isRenamingThis: Bool {
+        renameTarget?.id == item.id
+    }
+
+    var body: some View {
+        FileRowView(
+            item: item,
+            isSelected: isSelected
+        )
+        .padding(.leading, CGFloat(depth * 12))
+        .contentShape(Rectangle())
+        .tag(item.id)
+        .contextMenu {
+            Button("Rename") {
+                renameTarget = RenameTarget(
+                    id: item.id,
+                    name: item.name,
+                    isDirectory: item.isDirectory,
+                    parentURL: item.url.deletingLastPathComponent()
+                )
+            }
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([item.url])
+            }
+        }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { }
+            }
+        )
+        .popover(isPresented: Binding(
+            get: { isRenamingThis },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            if let target = renameTarget, target.id == item.id {
+                RenamePopover(
+                    currentName: target.name,
+                    isDirectory: target.isDirectory,
+                    parentDirectoryURL: target.parentURL,
+                    onConfirm: { newName in
+                        appState.renameItem(id: target.id, newName: newName)
+                        renameTarget = nil
+                    },
+                    onCancel: {
+                        renameTarget = nil
+                    }
+                )
+            }
+        }
+    }
+}
+
 // MARK: - Open Files List
 
 private struct OpenFilesList: View {
     let appState: AppState
+    @Binding var renameTarget: RenameTarget?
 
     var body: some View {
         ForEach(appState.openFiles) { item in
-            FileRowView(
+            OpenFileRow(
                 item: item,
-                isSelected: appState.selectedFileID == item.id
+                isSelected: appState.selectedFileID == item.id,
+                renameTarget: $renameTarget,
+                appState: appState
             )
-            .contentShape(Rectangle())
-            .tag(item.id)
-            .contextMenu {
-                Button("Reload from Disk") {
-                    appState.reloadFile(id: item.id)
-                }
-                Button("Reveal in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([item.url])
-                }
-                Divider()
-                Button("Close") {
-                    appState.closeFile(id: item.id)
-                }
+        }
+    }
+}
+
+// MARK: - Open File Row (with rename popover)
+
+private struct OpenFileRow: View {
+    let item: FileTreeItem
+    let isSelected: Bool
+    @Binding var renameTarget: RenameTarget?
+    let appState: AppState
+
+    private var isRenamingThis: Bool {
+        renameTarget?.id == item.id
+    }
+
+    var body: some View {
+        FileRowView(
+            item: item,
+            isSelected: isSelected
+        )
+        .contentShape(Rectangle())
+        .tag(item.id)
+        .contextMenu {
+            Button("Rename") {
+                renameTarget = RenameTarget(
+                    id: item.id,
+                    name: item.name,
+                    isDirectory: item.isDirectory,
+                    parentURL: item.url.deletingLastPathComponent()
+                )
+            }
+            Button("Reload from Disk") {
+                appState.reloadFile(id: item.id)
+            }
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([item.url])
+            }
+            Divider()
+            Button("Close") {
+                appState.closeFile(id: item.id)
+            }
+        }
+        .popover(isPresented: Binding(
+            get: { isRenamingThis },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            if let target = renameTarget, target.id == item.id {
+                RenamePopover(
+                    currentName: target.name,
+                    isDirectory: target.isDirectory,
+                    parentDirectoryURL: target.parentURL,
+                    onConfirm: { newName in
+                        appState.renameItem(id: target.id, newName: newName)
+                        renameTarget = nil
+                    },
+                    onCancel: {
+                        renameTarget = nil
+                    }
+                )
             }
         }
     }

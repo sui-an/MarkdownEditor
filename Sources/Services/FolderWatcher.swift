@@ -13,11 +13,8 @@ final class FolderWatcher {
     func start() {
         var context = FSEventStreamContext(
             version: 0,
-            info: Unmanaged.passUnretained(self).toOpaque(),
-            retain: { info in
-                guard let info else { return info }
-                return UnsafeRawPointer(Unmanaged<FolderWatcher>.fromOpaque(info).retain().toOpaque())
-            },
+            info: Unmanaged.passRetained(self).toOpaque(),
+            retain: nil,
             release: { info in
                 guard let info else { return }
                 Unmanaged<FolderWatcher>.fromOpaque(info).release()

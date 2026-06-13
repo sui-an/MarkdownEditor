@@ -8,9 +8,15 @@ struct FolderHeaderView: View {
     let onToggle: () -> Void
     let isSelected: Bool
     let onSelect: () -> Void
+    @Binding var renameTarget: RenameTarget?
+    let appState: AppState
+
+    private var isRenamingThis: Bool {
+        renameTarget?.id == folder.id
+    }
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             Image(systemName: "folder")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
@@ -28,36 +34,39 @@ struct FolderHeaderView: View {
             RoundedRectangle(cornerRadius: 5)
                 .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
         )
-        .overlay(RightClickCatcher(onRightClick: onSelect))
         .onTapGesture { onSelect() }
         .onTapGesture(count: 2) { onToggle() }
         .contextMenu {
+            Button("Rename") {
+                renameTarget = RenameTarget(
+                    id: folder.id,
+                    name: folder.name,
+                    isDirectory: true,
+                    parentURL: folder.url.deletingLastPathComponent()
+                )
+            }
             Button("Reload from Disk") { onReload() }
             Divider()
             Button("Remove Folder") { onRemove() }
         }
-    }
-}
-
-// MARK: - Right-Click Catcher
-
-private struct RightClickCatcher: NSViewRepresentable {
-    let onRightClick: () -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        CatcherView()
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? CatcherView)?.onRightClick = onRightClick
-    }
-}
-
-private final class CatcherView: NSView {
-    var onRightClick: (() -> Void)?
-
-    override func rightMouseDown(with event: NSEvent) {
-        onRightClick?()
-        super.rightMouseDown(with: event)
+        .popover(isPresented: Binding(
+            get: { isRenamingThis },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            if let target = renameTarget, target.id == folder.id {
+                RenamePopover(
+                    currentName: target.name,
+                    isDirectory: target.isDirectory,
+                    parentDirectoryURL: target.parentURL,
+                    onConfirm: { newName in
+                        appState.renameItem(id: target.id, newName: newName)
+                        renameTarget = nil
+                    },
+                    onCancel: {
+                        renameTarget = nil
+                    }
+                )
+            }
+        }
     }
 }

@@ -3,6 +3,31 @@ import Observation
 import AppKit
 import UniformTypeIdentifiers
 
+// MARK: - URL Helpers
+
+extension URL {
+    var isHTMLEditorFile: Bool {
+        let ext = pathExtension.lowercased()
+        return ext == "html" || ext == "htm"
+    }
+}
+
+// MARK: - NSAlert Helpers
+
+extension NSAlert {
+    static func showError(message: String, informative: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = informative
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
+
+    static func showWarning(message: String, informative: String) {
+        showError(message: message, informative: informative)
+    }
+}
+
 // MARK: - HTML Cache Entry
 
 private final class CachedHTML {
@@ -51,9 +76,7 @@ final class AppState {
     var collapsedFolderPaths: Set<String> = []
 
     var isCurrentFileHTML: Bool {
-        guard let url = currentFileURL else { return false }
-        let ext = url.pathExtension.lowercased()
-        return ext == "html" || ext == "htm"
+        currentFileURL?.isHTMLEditorFile ?? false
     }
 
     /// Returns true when the currently selected file still exists in the file index
@@ -99,6 +122,7 @@ final class AppState {
     private var folderWatchers: [String: FolderWatcher] = [:]
     private var selectedFileURL: URL?
     private var lastSavedContent: String = ""
+    private var isRenaming = false
 
     /// Per-window WebView cache (replaces global singleton)
     let webViewCache = WebViewCache()
@@ -182,26 +206,22 @@ final class AppState {
         viewRefs.textView?.undoManager?.registerUndo(withTarget: self) { target in
             target.changeFontSize(to: oldSize)
         }
-        // Update text view font and apply to all existing text immediately
-        if let tv = viewRefs.textView {
-            tv.font = NSFont.systemFont(ofSize: newSize)
-            if let storage = tv.textStorage, storage.length > 0 {
-                storage.addAttribute(.font, value: NSFont.systemFont(ofSize: newSize), range: NSRange(location: 0, length: storage.length))
-            }
-            tv.needsDisplay = true
-        }
+        applyFontSizeToTextView(newSize)
     }
 
     private func changeFontSize(to size: CGFloat) {
         fontSize = size
         UserDefaults.standard.set(size, forKey: "editorFontSize")
-        if let tv = viewRefs.textView {
-            tv.font = NSFont.systemFont(ofSize: size)
-            if let storage = tv.textStorage, storage.length > 0 {
-                storage.addAttribute(.font, value: NSFont.systemFont(ofSize: size), range: NSRange(location: 0, length: storage.length))
-            }
-            tv.needsDisplay = true
+        applyFontSizeToTextView(size)
+    }
+
+    private func applyFontSizeToTextView(_ size: CGFloat) {
+        guard let tv = viewRefs.textView else { return }
+        tv.font = NSFont.systemFont(ofSize: size)
+        if let storage = tv.textStorage, storage.length > 0 {
+            storage.addAttribute(.font, value: NSFont.systemFont(ofSize: size), range: NSRange(location: 0, length: storage.length))
         }
+        tv.needsDisplay = true
     }
 
     func resetFontSize() {
@@ -312,9 +332,7 @@ final class AppState {
             return
         }
 
-        htmlCache.removeObject(forKey: url as NSURL)
-        cachedContentHash.removeValue(forKey: url)
-        cachedHTML.removeValue(for: url)
+        evictFileFromAllCaches(url)
 
         do {
             let content = try FileService.readFile(at: url)
@@ -340,11 +358,7 @@ final class AppState {
     func closeFile(id: String) {
         saveCurrentFileIfDirty()
         if let item = openFiles.first(where: { $0.id == id }) {
-            cachedContentHash.removeValue(forKey: item.url)
-            fileContents.removeValue(forKey: item.url)
-            fileSavedHashes.removeValue(forKey: item.url)
-            fileContentAccessOrder.removeAll { $0 == item.url }
-            cachedHTML.removeValue(for: item.url)
+            evictFileFromAllCaches(item.url)
         }
         openFiles.removeAll { $0.id == id }
         fileIndex.removeValue(forKey: id)
@@ -385,12 +399,7 @@ final class AppState {
         let oldFiles = Set(oldFolder.allFiles.filter { !$0.isDirectory }.map { $0.url })
         let newFiles = Set(newRoot.allFiles.filter { !$0.isDirectory }.map { $0.url })
         for fileURL in oldFiles.subtracting(newFiles) {
-            htmlCache.removeObject(forKey: fileURL as NSURL)
-            cachedContentHash.removeValue(forKey: fileURL)
-            fileContents.removeValue(forKey: fileURL)
-            fileSavedHashes.removeValue(forKey: fileURL)
-            fileContentAccessOrder.removeAll { $0 == fileURL }
-            cachedHTML.removeValue(for: fileURL)
+            evictFileFromAllCaches(fileURL)
         }
 
         let updatedRoot = FileTreeItem(
@@ -428,9 +437,7 @@ final class AppState {
         }
 
         for file in folder.allFiles {
-            htmlCache.removeObject(forKey: file.url as NSURL)
-            cachedContentHash.removeValue(forKey: file.url)
-            cachedHTML.removeValue(for: file.url)
+            evictFileFromAllCaches(file.url)
         }
 
         folderWatchers[id]?.stop()
@@ -453,6 +460,173 @@ final class AppState {
         if !isSelectedDirectoryValid {
             selectedDirectoryID = nil
         }
+    }
+
+    // MARK: - Rename Item
+
+    func renameItem(id: String, newName: String) {
+        guard !newName.isEmpty, !newName.contains("/"), !newName.contains(":") else { return }
+
+        // Check fileIndex first (files), then search rootFolders tree (directories)
+        var item = fileIndex[id]
+        if item == nil {
+            for folder in rootFolders {
+                if let found = findItem(id: id, in: folder) {
+                    item = found
+                    break
+                }
+            }
+        }
+        guard let item else { return }
+        let oldURL = item.url
+        let parentURL = oldURL.deletingLastPathComponent()
+        let newURL = parentURL.appendingPathComponent(newName)
+
+        guard oldURL != newURL else { return }
+
+        isRenaming = true
+        defer { isRenaming = false }
+
+        do {
+            try FileService.renameItem(at: oldURL, to: newURL)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Cannot Rename"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
+
+        let updatedChildren = item.children?.map { rebuidSubtree($0, oldParentURL: oldURL, newParentURL: newURL) }
+        let updatedItem = FileTreeItem(url: newURL, name: newName, isDirectory: item.isDirectory, parentID: item.parentID, children: updatedChildren)
+
+        // Update in rootFolders tree
+        for idx in rootFolders.indices {
+            if replaceInTree(root: &rootFolders[idx], oldURL: oldURL, new: updatedItem) {
+                break
+            }
+        }
+
+        // Update fileIndex
+        fileIndex.removeValue(forKey: id)
+        if item.isDirectory {
+            // For directories, rebuild entire fileIndex from tree
+            fileIndex.removeAll()
+            for folder in rootFolders {
+                for item in folder.allFiles where !item.isDirectory {
+                    fileIndex[item.id] = item
+                }
+            }
+            for item in openFiles {
+                fileIndex[item.id] = item
+            }
+        } else {
+            fileIndex[updatedItem.id] = updatedItem
+        }
+
+        // Update flatFolderFilesByFolder
+        if item.isDirectory {
+            // For directories, rebuild flat lists from the updated tree
+            flatFolderFilesByFolder.removeAll()
+            for rootFolder in rootFolders {
+                var rootFlat: [FlatFolderFile] = []
+                if !collapsedFolderPaths.contains(rootFolder.url.path) {
+                    collectFlatFiles(from: rootFolder, depth: 0, into: &rootFlat, collapsedPaths: collapsedFolderPaths)
+                }
+                flatFolderFilesByFolder[rootFolder.id] = rootFlat
+            }
+        } else {
+            // For files, targeted single-row replacement
+            for (folderID, files) in flatFolderFilesByFolder {
+                if let fileIdx = files.firstIndex(where: { $0.item.id == id }) {
+                    var newFiles = files
+                    newFiles[fileIdx] = FlatFolderFile(item: updatedItem, depth: files[fileIdx].depth)
+                    flatFolderFilesByFolder[folderID] = newFiles
+                    break
+                }
+            }
+        }
+
+        // Update openFiles if it's an opened individual file
+        if let openIdx = openFiles.firstIndex(where: { $0.id == id }) {
+            openFiles[openIdx] = updatedItem
+        }
+
+        // Update folderWatchers if this is a root folder
+        if let watcher = folderWatchers.removeValue(forKey: id) {
+            folderWatchers[updatedItem.id] = watcher
+        }
+
+        // If renamed item is currently open, update URL references without touching content
+        if currentFileURL == oldURL {
+            currentFileURL = newURL
+            selectedFileURL = newURL
+            selectedFileID = updatedItem.id
+            // Migrate cache keys
+            if let content = fileContents.removeValue(forKey: oldURL) {
+                fileContents[newURL] = content
+            }
+            if let hash = fileSavedHashes.removeValue(forKey: oldURL) {
+                fileSavedHashes[newURL] = hash
+            }
+            if let idx = fileContentAccessOrder.firstIndex(of: oldURL) {
+                fileContentAccessOrder[idx] = newURL
+            }
+            if let hash = cachedContentHash.removeValue(forKey: oldURL) {
+                cachedContentHash[newURL] = hash
+            }
+            if let cached = htmlCache.object(forKey: oldURL as NSURL) {
+                htmlCache.removeObject(forKey: oldURL as NSURL)
+                htmlCache.setObject(cached, forKey: newURL as NSURL, cost: cached.html.utf8.count)
+            }
+            if let cached = cachedHTML.value(for: oldURL) {
+                cachedHTML.removeValue(for: oldURL)
+                cachedHTML.set(cached, for: newURL)
+            }
+        } else {
+            // Clean up caches for non-current renamed item
+            evictFileFromAllCaches(oldURL)
+        }
+
+        // Update selectedDirectoryID if it was the renamed item
+        if selectedDirectoryID == id {
+            selectedDirectoryID = updatedItem.id
+        }
+    }
+
+    /// Recursively replaces a FileTreeItem in the tree by matching oldURL.
+    /// Returns true if the replacement was made.
+    private func replaceInTree(root: inout FileTreeItem, oldURL: URL, new item: FileTreeItem) -> Bool {
+        if root.url == oldURL {
+            root = item
+            return true
+        }
+        guard var children = root.children else { return false }
+        for i in children.indices {
+            if replaceInTree(root: &children[i], oldURL: oldURL, new: item) {
+                root.children = children
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Recursively finds a FileTreeItem by ID in the tree.
+    private func findItem(id: String, in item: FileTreeItem) -> FileTreeItem? {
+        if item.id == id { return item }
+        guard let children = item.children else { return nil }
+        for child in children {
+            if let found = findItem(id: id, in: child) { return found }
+        }
+        return nil
+    }
+
+    /// Recursively rebuilds a subtree with updated parent URLs.
+    private func rebuidSubtree(_ item: FileTreeItem, oldParentURL: URL, newParentURL: URL) -> FileTreeItem {
+        let newURL = newParentURL.appendingPathComponent(item.name)
+        let newChildren = item.children?.map { rebuidSubtree($0, oldParentURL: item.url, newParentURL: newURL) }
+        return FileTreeItem(url: newURL, name: item.name, isDirectory: item.isDirectory, parentID: nil, children: newChildren)
     }
 
     // MARK: - Select File
@@ -564,15 +738,8 @@ final class AppState {
         // (HTML→markdown, markdown→HTML) must clear the preview to
         // prevent content-format leaking into the wrong template.
         let oldURL = currentFileURL
-        let oldIsHTML: Bool
-        if let prev = oldURL {
-            let ext = prev.pathExtension.lowercased()
-            oldIsHTML = ext == "html" || ext == "htm"
-        } else {
-            oldIsHTML = false
-        }
-        let newExt = url.pathExtension.lowercased()
-        let newIsHTML = newExt == "html" || newExt == "htm"
+        let oldIsHTML = oldURL?.isHTMLEditorFile ?? false
+        let newIsHTML = url.isHTMLEditorFile
         let typeChanged = oldIsHTML != newIsHTML
 
         selectedFileURL = url
@@ -656,9 +823,7 @@ final class AppState {
                     }
                 }
 
-                let ext = url.pathExtension.lowercased()
-                let isHTML = ext == "html" || ext == "htm"
-                if isHTML {
+                if url.isHTMLEditorFile {
                     DispatchQueue.main.async { [weak self] in
                         guard let self else { return }
                         guard token == self.generation else { return }
@@ -707,9 +872,7 @@ final class AppState {
 
     /// Generate HTML from markdown content, cache it, and update rendered properties.
     private func generateAndCacheHTML(content: String, url: URL, token: Int64, cacheKey: String) {
-        let ext = url.pathExtension.lowercased()
-        let isHTML = ext == "html" || ext == "htm"
-        if isHTML {
+        if url.isHTMLEditorFile {
             DispatchQueue.main.async { [weak self] in
                 guard let self, token == self.generation else { return }
                 renderedHTML = content
@@ -781,8 +944,7 @@ final class AppState {
         pendingOutlineWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            let ext = currentFileURL?.pathExtension.lowercased()
-            let isHTML = ext == "html" || ext == "htm"
+            let isHTML = currentFileURL?.isHTMLEditorFile ?? false
             let headings = isHTML ? HeadingParser.parseHTML(content) : HeadingParser.parse(content)
             DispatchQueue.main.async {
                 guard token == self.outlineGeneration else { return }
@@ -878,9 +1040,20 @@ final class AppState {
         cachedHTML.set(cached, for: url)
     }
 
+    /// Evicts all cache entries for a given file URL.
+    private func evictFileFromAllCaches(_ url: URL) {
+        htmlCache.removeObject(forKey: url as NSURL)
+        cachedContentHash.removeValue(forKey: url)
+        fileContents.removeValue(forKey: url)
+        fileSavedHashes.removeValue(forKey: url)
+        fileContentAccessOrder.removeAll { $0 == url }
+        cachedHTML.removeValue(for: url)
+    }
+
     // MARK: - File System Changes
 
     private func handleFileSystemChanges(rootFolderID: String, urls: [URL]) {
+        guard !isRenaming else { return }
         guard let idx = rootFolders.firstIndex(where: { $0.id == rootFolderID }) else { return }
         let folderURL = rootFolders[idx].url
 
@@ -917,12 +1090,7 @@ final class AppState {
     private func removeFileFromFolder(rootFolderID: String, url: URL) {
         guard let idx = rootFolders.firstIndex(where: { $0.id == rootFolderID }) else { return }
         removeFileRecursively(from: &rootFolders[idx], url: url)
-        htmlCache.removeObject(forKey: url as NSURL)
-        cachedContentHash.removeValue(forKey: url)
-        fileContents.removeValue(forKey: url)
-        fileSavedHashes.removeValue(forKey: url)
-        fileContentAccessOrder.removeAll { $0 == url }
-        cachedHTML.removeValue(for: url)
+        evictFileFromAllCaches(url)
     }
 
     private func removeFileRecursively(from item: inout FileTreeItem, url: URL) {
@@ -1039,8 +1207,7 @@ final class AppState {
     }
 
     private func reloadExternallyChangedFile(url: URL) {
-        htmlCache.removeObject(forKey: url as NSURL)
-        cachedContentHash.removeValue(forKey: url)
+        evictFileFromAllCaches(url)
         do {
             let content = try FileService.readFile(at: url)
             let cacheKey = quickHashForCacheCheck(url: url)

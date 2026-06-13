@@ -10,6 +10,17 @@ enum FileService {
         try content.write(to: url, atomically: true, encoding: .utf8)
     }
 
+    static func renameItem(at oldURL: URL, to newURL: URL) throws {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: oldURL.path) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        guard !fm.fileExists(atPath: newURL.path) else {
+            throw CocoaError(.fileWriteFileExists)
+        }
+        try fm.moveItem(at: oldURL, to: newURL)
+    }
+
     static func scanDirectory(at url: URL) throws -> FileTreeItem {
         let fm = FileManager.default
         let name = url.lastPathComponent
