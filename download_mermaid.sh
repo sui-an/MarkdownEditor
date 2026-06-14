@@ -4,7 +4,7 @@
 
 cd "$(dirname "$0")"
 
-MERMAID_URL="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"
+MERMAID_URL="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
 OUTPUT="Resources/mermaid.min.js"
 
 if [ -f "$OUTPUT" ] && [ "$1" != "--force" ]; then

@@ -41,7 +41,7 @@ echo "==> Building $APP_NAME.app ..."
 MERMAID="$PROJECT_DIR/Resources/mermaid.min.js"
 if [ ! -f "$MERMAID" ]; then
   echo "==> Downloading mermaid.min.js ..."
-  curl -sL "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js" -o "$MERMAID"
+  curl -sL "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js" -o "$MERMAID"
   echo "    Downloaded: $(wc -c < "$MERMAID") bytes"
 else
   echo "==> mermaid.min.js already present, skipping download"
@@ -179,6 +179,7 @@ swiftc "${SWIFTC_FLAGS[@]}" \
 # 5. Copy resources
 echo "==> Copying resources ..."
 cp "$PROJECT_DIR/Resources/Assets.xcassets/AppIcon.appiconset/MarkdownEditor.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+cp "$PROJECT_DIR/Resources/Credits.html" "$APP_BUNDLE/Contents/Resources/Credits.html"
 cp "$MERMAID" "$APP_BUNDLE/Contents/Resources/mermaid.min.js"
 [ -f "$HLJS" ] && cp "$HLJS" "$APP_BUNDLE/Contents/Resources/highlight.min.js" || true
 
