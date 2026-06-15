@@ -124,9 +124,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<- PLIST
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.0.4</string>
+	<string>0.0.5</string>
 	<key>CFBundleVersion</key>
-	<string>0.0.4</string>
+	<string>0.0.5</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHumanReadableCopyright</key>
@@ -155,6 +155,7 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Services/SearchJS.swift"
   "$PROJECT_DIR/Sources/Services/SessionRestoreService.swift"
   "$PROJECT_DIR/Sources/Services/ThemeManager.swift"
+  "$PROJECT_DIR/Sources/Services/CodeTokenizer.swift"
   "$PROJECT_DIR/Sources/Views/ContentView.swift"
   "$PROJECT_DIR/Sources/Views/OutlinePanelView.swift"
   "$PROJECT_DIR/Sources/Views/ResizableHSplitView.swift"
