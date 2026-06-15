@@ -4,6 +4,7 @@ final class MarkdownTextStorage: NSTextStorage {
     private let backingStore = NSMutableAttributedString()
     var suppressHighlighting = false
     private var editingNeedsHighlight = false
+    private var insideHighlight = false
 
     // MARK: - Pre-compiled regex
 
@@ -84,9 +85,11 @@ final class MarkdownTextStorage: NSTextStorage {
     /// text‑system display notification. This ensures the display pass
     /// sees both content and colors in a single frame — no flicker.
     override func endEditing() {
-        if editingNeedsHighlight && !suppressHighlighting {
+        if editingNeedsHighlight && !suppressHighlighting && !insideHighlight {
             editingNeedsHighlight = false
+            insideHighlight = true
             autoHighlight()
+            insideHighlight = false
         }
         super.endEditing()
     }
@@ -269,30 +272,18 @@ private extension MarkdownTextStorage {
         for m in Self.boldRegex.matches(in: text as String, range: sr) {
             let r = m.range(at: 1)
             backingStore.addAttribute(.foregroundColor, value: HighlightColors.bold(isDark), range: r)
-            let pt = (backingStore.attribute(.font, at: r.location, effectiveRange: nil) as? NSFont)?.pointSize ?? NSFont.systemFontSize
-            backingStore.addAttribute(.font, value: NSFont.systemFont(ofSize: pt, weight: .bold), range: r)
         }
         for m in Self.boldUnderlineRegex.matches(in: text as String, range: sr) {
             let r = m.range(at: 1)
             backingStore.addAttribute(.foregroundColor, value: HighlightColors.bold(isDark), range: r)
-            let pt = (backingStore.attribute(.font, at: r.location, effectiveRange: nil) as? NSFont)?.pointSize ?? NSFont.systemFontSize
-            backingStore.addAttribute(.font, value: NSFont.systemFont(ofSize: pt, weight: .bold), range: r)
         }
         for m in Self.italicStarRegex.matches(in: text as String, range: sr) {
             let r = m.range(at: 1)
             backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic(isDark), range: r)
-            let pt = (backingStore.attribute(.font, at: r.location, effectiveRange: nil) as? NSFont)?.pointSize ?? NSFont.systemFontSize
-            if let f = NSFont(descriptor: NSFont.systemFont(ofSize: pt).fontDescriptor.withSymbolicTraits(.italic), size: pt) {
-                backingStore.addAttribute(.font, value: f, range: r)
-            }
         }
         for m in Self.italicUnderscoreRegex.matches(in: text as String, range: sr) {
             let r = m.range(at: 1)
             backingStore.addAttribute(.foregroundColor, value: HighlightColors.italic(isDark), range: r)
-            let pt = (backingStore.attribute(.font, at: r.location, effectiveRange: nil) as? NSFont)?.pointSize ?? NSFont.systemFontSize
-            if let f = NSFont(descriptor: NSFont.systemFont(ofSize: pt).fontDescriptor.withSymbolicTraits(.italic), size: pt) {
-                backingStore.addAttribute(.font, value: f, range: r)
-            }
         }
         for m in Self.linkRegex.matches(in: text as String, range: sr) {
             backingStore.addAttribute(.foregroundColor, value: HighlightColors.link(isDark), range: m.range(at: 1))
