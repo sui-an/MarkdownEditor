@@ -163,11 +163,11 @@ enum MarkdownParser {
     }
     #endif
 
-    /// Extract all fenced code blocks (```...```) so base64 preprocessing
+    /// Extract all fenced code blocks (``` or ~~~ ... ``` or ~~~) so base64 preprocessing
     /// doesn't corrupt code examples containing `![alt](data:...)` syntax.
     private static let codeBlockExtractRegex: NSRegularExpression = {
         try! NSRegularExpression(
-            pattern: #"```(\w*)\s*\n([\s\S]*?)```"#,
+            pattern: #"(```|~~~)(\w*)\s*\n([\s\S]*?)\1"#,
             options: .caseInsensitive
         )
     }()
@@ -182,8 +182,8 @@ enum MarkdownParser {
 
         for match in pattern.matches(in: markdown, range: NSRange(location: 0, length: nsText.length)) {
             let full = match.range(at: 0)
-            let lang = match.range(at: 1)
-            let content = match.range(at: 2)
+            let lang = match.range(at: 2)
+            let content = match.range(at: 3)
 
             text += nsText.substring(with: NSRange(location: lastEnd, length: full.location - lastEnd))
             let idx = blocks.count

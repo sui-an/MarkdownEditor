@@ -161,7 +161,6 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Models/AppState.swift"
   "$PROJECT_DIR/Sources/Models/FileTreeItem.swift"
   "$PROJECT_DIR/Sources/Models/HeadingItem.swift"
-  "$PROJECT_DIR/Sources/Models/LRUCache.swift"
   "$PROJECT_DIR/Sources/Models/SearchState.swift"
   "$PROJECT_DIR/Sources/Models/ViewRefs.swift"
   "$PROJECT_DIR/Sources/Services/FileService.swift"

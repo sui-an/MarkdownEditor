@@ -107,7 +107,13 @@ final class SearchState {
             offset += (replacement as NSString).length - range.length
         }
         storage.endEditing()
-        queryDidChange(textView: textView)
+        // Recalculate matches from final text and apply highlights inline
+        // (avoid calling queryDidChange → performSearch which could trigger
+        // nested text storage editing notifications)
+        matches = findMatches(in: textView.string, for: query)
+        currentMatchIndex = matches.isEmpty ? 0 : 0
+        previousMatchIndex = -1
+        applyHighlights(textView: textView)
     }
 
     func queryDidChange(textView: NSTextView?) {
