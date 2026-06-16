@@ -4,23 +4,40 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="MarkdownEditor"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
+APP_TARGET_VERSION="14.0"
 
-# cmark-gfm library (Homebrew). Gracefully degrade if not present.
+# cmark-gfm library (Homebrew). Gracefully degrade if not present. When the
+# installed dylib targets a newer macOS than our default, build the app for that
+# newer target so Markdown preview keeps the full cmark-gfm renderer without
+# linker warnings.
 CMARK_PREFIX="$(brew --prefix cmark-gfm 2>/dev/null || echo "")"
+CMARK_INCLUDE=""
+CMARK_LIB=""
+CMARK_LINK=""
 if [ -n "$CMARK_PREFIX" ] && [ -f "$CMARK_PREFIX/include/cmark-gfm.h" ]; then
+  CMARK_CANDIDATE_DYLIB="$(ls "$CMARK_PREFIX"/lib/libcmark-gfm.*.dylib 2>/dev/null | head -1 || true)"
+  CMARK_MINOS=""
+  if [ -n "$CMARK_CANDIDATE_DYLIB" ]; then
+    CMARK_MINOS="$(otool -l "$CMARK_CANDIDATE_DYLIB" 2>/dev/null | awk '/LC_BUILD_VERSION/{in_build=1} in_build && /minos/{print $2; exit}' || true)"
+  fi
+  APP_TARGET_MAJOR="${APP_TARGET_VERSION%%.*}"
+  CMARK_MINOS_MAJOR="${CMARK_MINOS%%.*}"
+  if [ -n "$CMARK_MINOS_MAJOR" ] && [ "$CMARK_MINOS_MAJOR" -gt "$APP_TARGET_MAJOR" ] 2>/dev/null; then
+    APP_TARGET_VERSION="$CMARK_MINOS"
+    echo "==> cmark-gfm targets macOS $CMARK_MINOS; building app for macOS $APP_TARGET_VERSION"
+  else
+    echo "==> Using cmark-gfm from $CMARK_PREFIX"
+  fi
   CMARK_INCLUDE="$CMARK_PREFIX/include"
   CMARK_LIB="$CMARK_PREFIX/lib"
   CMARK_LINK="-lcmark-gfm -lcmark-gfm-extensions"
-  echo "==> Using cmark-gfm from $CMARK_PREFIX"
 else
-  CMARK_INCLUDE=""
-  CMARK_LIB=""
-  CMARK_LINK=""
   echo "==> cmark-gfm not found; falling back to built-in parser"
 fi
+APP_TARGET="arm64-apple-macosx$APP_TARGET_VERSION"
 
 SWIFTC_FLAGS=(
-  -target "arm64-apple-macosx14.0"
+  -target "$APP_TARGET"
   -sdk "$(xcrun --show-sdk-path)"
   -parse-as-library
   -O
@@ -155,7 +172,6 @@ SOURCES=(
   "$PROJECT_DIR/Sources/Services/SearchJS.swift"
   "$PROJECT_DIR/Sources/Services/SessionRestoreService.swift"
   "$PROJECT_DIR/Sources/Services/ThemeManager.swift"
-  "$PROJECT_DIR/Sources/Services/CodeTokenizer.swift"
   "$PROJECT_DIR/Sources/Views/ContentView.swift"
   "$PROJECT_DIR/Sources/Views/OutlinePanelView.swift"
   "$PROJECT_DIR/Sources/Views/ResizableHSplitView.swift"

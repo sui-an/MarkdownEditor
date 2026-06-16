@@ -218,8 +218,10 @@ final class AppState {
     private func applyFontSizeToTextView(_ size: CGFloat) {
         guard let tv = viewRefs.textView else { return }
         tv.font = NSFont.systemFont(ofSize: size)
-        if let storage = tv.textStorage, storage.length > 0 {
-            storage.addAttribute(.font, value: NSFont.systemFont(ofSize: size), range: NSRange(location: 0, length: storage.length))
+        if let storage = tv.textStorage as? MarkdownTextStorage, storage.length > 0 {
+            storage.baseFontSize = size
+            let isDark = NSApp.effectiveAppearance.name == .darkAqua
+            storage.rehighlightAll(isDark: isDark)
         }
         tv.needsDisplay = true
     }
@@ -962,8 +964,12 @@ final class AppState {
         // Read clean markdown from the text storage (replaces \u{FFFC}
         // attachment chars with original markdown syntax).
         let content: String
-        if let tv = viewRefs.textView, let storage = tv.textStorage {
-            content = MarkdownTextView.Coordinator.buildCleanMarkdown(from: storage)
+        if let tv = viewRefs.textView {
+            if tv.string.contains("\u{FFFC}"), let storage = tv.textStorage {
+                content = MarkdownTextView.Coordinator.buildCleanMarkdown(from: storage)
+            } else {
+                content = tv.string
+            }
         } else {
             guard isFileDirty else { return }
             content = currentFileContent
