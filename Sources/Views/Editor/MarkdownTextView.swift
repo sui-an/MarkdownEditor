@@ -305,9 +305,7 @@ struct MarkdownTextView: NSViewRepresentable {
         // Build text system
         let textStorage = MarkdownTextStorage()
         let layoutManager = NSLayoutManager()
-        // Keep layout contiguous so AppKit has a stable document height when
-        // arrow-key navigation near EOF asks NSTextView to reveal the cursor.
-        layoutManager.allowsNonContiguousLayout = false
+        layoutManager.allowsNonContiguousLayout = true
         textStorage.addLayoutManager(layoutManager)
 
         let textContainer = NSTextContainer(containerSize: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
@@ -392,18 +390,18 @@ struct MarkdownTextView: NSViewRepresentable {
         if isFileSwitch {
             coordinator.lastFileURL = currentFileURL
             coordinator.hasInlineImages = text.contains("![")
+            coordinator.hasInlineImageAttachments = false
             coordinator.pendingContentLoad = true
             textView.undoManager?.removeAllActions()
             // Only update text when content actually changed (cache hit).
             // Skip when text is still the previous file's content (cache miss)
             // to avoid NSTextStorage re-layout flash.
             if !text.isEmpty && text != textView.string {
+                coordinator.resetScrollPosition(scrollView)
                 coordinator.applyLoadedTextWithoutFlash(text, to: textView, isDark: isDark, fontSize: fontSize)
                 coordinator.pendingContentLoad = false
                 coordinator.scheduleImageProcessing()
                 wrapper.lineNumberView.needsDisplay = true
-                scrollView.contentView.scroll(to: .zero)
-                scrollView.reflectScrolledClipView(scrollView.contentView)
             }
             return
         }
@@ -419,11 +417,10 @@ struct MarkdownTextView: NSViewRepresentable {
                 return
             }
 
+            coordinator.resetScrollPosition(scrollView)
             coordinator.applyLoadedTextWithoutFlash(text, to: textView, isDark: isDark, fontSize: fontSize)
             coordinator.scheduleImageProcessing()
             coordinator.editorWrapper?.lineNumberView.needsDisplay = true
-            scrollView.contentView.scroll(to: .zero)
-            scrollView.reflectScrolledClipView(scrollView.contentView)
             if text.isEmpty {
                 textView.window?.makeFirstResponder(textView)
             }
@@ -435,7 +432,7 @@ struct MarkdownTextView: NSViewRepresentable {
             coordinator.scheduleImageProcessing()
             return
         }
-        if let storage = textView.textStorage {
+        if coordinator.hasInlineImageAttachments, let storage = textView.textStorage {
             let cleanCurrent = Coordinator.buildCleanMarkdown(from: storage)
             if cleanCurrent == text {
                 coordinator.scheduleImageProcessing()
@@ -448,6 +445,7 @@ struct MarkdownTextView: NSViewRepresentable {
         print("[perf] 📝 Phase3 sync textView.string (textView!=text)")
 #endif
         coordinator.hasInlineImages = text.contains("![")
+        coordinator.hasInlineImageAttachments = false
         coordinator.suppressTextDidChange = true
         let selectedRange = textView.selectedRange()
         textView.string = text
@@ -486,6 +484,7 @@ struct MarkdownTextView: NSViewRepresentable {
         /// Cached flag: does the current file contain `![` (inline image syntax)?
         /// Avoids O(n) string scan on every keystroke for files without images.
         var hasInlineImages = false
+        var hasInlineImageAttachments = false
         /// Tracks the last applied isDark value to deduplicate theme application.
         var lastAppliedIsDark: Bool?
         private var scrollMonitor: Any?
@@ -529,7 +528,13 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
 
+        func resetScrollPosition(_ scrollView: NSScrollView) {
+            scrollView.contentView.scroll(to: .zero)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+
         func applyLoadedTextWithoutFlash(_ text: String, to textView: NSTextView, isDark: Bool, fontSize: CGFloat) {
+            hasInlineImageAttachments = false
             suppressTextDidChange = true
             if let storage = textView.textStorage as? MarkdownTextStorage {
                 storage.baseFontSize = fontSize
@@ -581,15 +586,14 @@ struct MarkdownTextView: NSViewRepresentable {
             // Build clean markdown from attachment attributes WITHOUT mutating
             // the text storage. This avoids the \u{FFFC} → base64 expansion
             // on every keystroke that caused layout reflow and scroll-to-end.
-            if let storage = textView.textStorage {
-                let cleanText = Self.buildCleanMarkdown(from: storage)
-                DispatchQueue.main.async {
-                    self.parent.text = cleanText
-                }
+            let cleanText: String
+            if hasInlineImageAttachments, let storage = textView.textStorage {
+                cleanText = Self.buildCleanMarkdown(from: storage)
             } else {
-                DispatchQueue.main.async {
-                    self.parent.text = textView.string
-                }
+                cleanText = textView.string
+            }
+            DispatchQueue.main.async {
+                self.parent.text = cleanText
             }
 
             scheduleImageProcessing()
@@ -597,6 +601,15 @@ struct MarkdownTextView: NSViewRepresentable {
 
         static func buildCleanMarkdown(from storage: NSTextStorage) -> String {
             let fullRange = NSRange(location: 0, length: storage.length)
+            var foundMarkdownAttachment = false
+            storage.enumerateAttribute(.attachment, in: fullRange, options: []) { value, _, stop in
+                if let attachment = value as? MarkdownImageAttachment, !attachment.markdownSource.isEmpty {
+                    foundMarkdownAttachment = true
+                    stop.pointee = true
+                }
+            }
+            guard foundMarkdownAttachment else { return storage.string }
+
             let result = NSMutableString(string: storage.string)
             // Walk in reverse so ranges stay valid after string replacements
             storage.enumerateAttribute(.attachment, in: fullRange, options: .reverse) { value, range, _ in
@@ -704,6 +717,7 @@ struct MarkdownTextView: NSViewRepresentable {
             textStorage.suppressHighlighting = false
 
             if didReplace {
+                hasInlineImageAttachments = true
                 let updatedRange = NSRange(location: 0, length: textStorage.length)
                 for layoutManager in textStorage.layoutManagers {
                     layoutManager.invalidateLayout(forCharacterRange: updatedRange, actualCharacterRange: nil)

@@ -964,8 +964,12 @@ final class AppState {
         // Read clean markdown from the text storage (replaces \u{FFFC}
         // attachment chars with original markdown syntax).
         let content: String
-        if let tv = viewRefs.textView, let storage = tv.textStorage {
-            content = MarkdownTextView.Coordinator.buildCleanMarkdown(from: storage)
+        if let tv = viewRefs.textView {
+            if tv.string.contains("\u{FFFC}"), let storage = tv.textStorage {
+                content = MarkdownTextView.Coordinator.buildCleanMarkdown(from: storage)
+            } else {
+                content = tv.string
+            }
         } else {
             guard isFileDirty else { return }
             content = currentFileContent
