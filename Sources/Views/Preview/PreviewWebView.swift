@@ -28,6 +28,9 @@ final class WebViewState: NSObject, WKNavigationDelegate {
             sv.scrollerStyle = .overlay
             sv.verticalScrollElasticity = .none
             sv.horizontalScrollElasticity = .none
+            sv.wantsLayer = true
+            sv.layerContentsRedrawPolicy = .onSetNeedsDisplay
+            sv.drawsBackground = false
         }
     }
 
@@ -193,13 +196,13 @@ final class WebViewCache {
     // thread on every first-time WKWebView creation (mermaid.min.js is 3.2MB).
     private static let cachedHighlightJS: String? = {
         guard let path = Bundle.main.path(forResource: "highlight.min", ofType: "js"),
-              let content = try? String(contentsOfFile: path) else { return nil }
+              let content = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
         return content
     }()
 
     static let cachedMermaidJS: String? = {
         guard let path = Bundle.main.path(forResource: "mermaid.min", ofType: "js"),
-              let content = try? String(contentsOfFile: path) else { return nil }
+              let content = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
         return content
     }()
 
@@ -364,6 +367,12 @@ struct PreviewWebView: NSViewRepresentable {
             container.subviews.filter { $0 !== webView }.forEach { $0.removeFromSuperview() }
         }
 
+        if context.coordinator.lastFileURL != fileURL {
+            context.coordinator.lastFileURL = fileURL
+            state.needsScrollReset = true
+            webView.evaluateJavaScript("window.scrollTo(0, 0)")
+        }
+
         if isHTMLFile {
             if !html.isEmpty {
                 if !state.hasLoadedContent || bodyHTML != state.lastBodyHTML {
@@ -441,6 +450,7 @@ struct PreviewWebView: NSViewRepresentable {
         var lastAppliedIsDark: Bool?
         var lastAppliedFontSize: CGFloat?
         var lastIsHTMLFile: Bool?
+        var lastFileURL: URL?
         private var themeObserver: Any?
 
         init() {

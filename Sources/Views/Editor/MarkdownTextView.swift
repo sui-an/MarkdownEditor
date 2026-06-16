@@ -214,7 +214,7 @@ final class EditorWrapperView: NSView {
     let textView: NSTextView
     private var scrollObserver: Any?
     private var textChangeObserver: Any?
-    private var lastLayoutTime: TimeInterval = 0
+    private var lineNumberRedrawScheduled = false
 
     init(textView: NSTextView, scrollView: NSScrollView) {
         self.textView = textView
@@ -231,7 +231,7 @@ final class EditorWrapperView: NSView {
             object: scrollView.contentView,
             queue: .main
         ) { [weak self] _ in
-            self?.lineNumberView.needsDisplay = true
+            self?.scheduleLineNumberRedraw()
         }
 
         // Redraw line numbers on text change
@@ -253,6 +253,15 @@ final class EditorWrapperView: NSView {
         if let o = textChangeObserver { NotificationCenter.default.removeObserver(o) }
     }
 
+    private func scheduleLineNumberRedraw() {
+        guard !lineNumberRedrawScheduled else { return }
+        lineNumberRedrawScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+            self?.lineNumberView.needsDisplay = true
+            self?.lineNumberRedrawScheduled = false
+        }
+    }
+
     override func layout() {
         super.layout()
         let lineNumberWidth: CGFloat = 30
@@ -261,20 +270,6 @@ final class EditorWrapperView: NSView {
         scrollView.frame = NSRect(x: lineNumberWidth, y: 0,
                                   width: scrollWidth, height: bounds.height)
         guard scrollWidth > 0 else { return }
-
-        let now = CACurrentMediaTime()
-        let interval = now - lastLayoutTime
-        lastLayoutTime = now
-        if let tc = textView.textContainer, interval > 0, interval < 0.08 {
-            tc.widthTracksTextView = false
-            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(restoreTrack), object: nil)
-            perform(#selector(restoreTrack), with: nil, afterDelay: 0.25)
-        }
-    }
-
-    @objc private func restoreTrack() {
-        textView.textContainer?.widthTracksTextView = true
-        needsLayout = true
     }
 }
 
@@ -310,7 +305,9 @@ struct MarkdownTextView: NSViewRepresentable {
         // Build text system
         let textStorage = MarkdownTextStorage()
         let layoutManager = NSLayoutManager()
-        layoutManager.allowsNonContiguousLayout = true
+        // Keep layout contiguous so AppKit has a stable document height when
+        // arrow-key navigation near EOF asks NSTextView to reveal the cursor.
+        layoutManager.allowsNonContiguousLayout = false
         textStorage.addLayoutManager(layoutManager)
 
         let textContainer = NSTextContainer(containerSize: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
@@ -377,18 +374,15 @@ struct MarkdownTextView: NSViewRepresentable {
         if coordinator.lastAppliedIsDark != isDark {
             coordinator.lastAppliedIsDark = isDark
             ThemeManager.applyTheme(textView: textView, scrollView: scrollView, lineNumberView: wrapper.lineNumberView, isDark: isDark)
-        } else {
-            textView.textColor = isDark
-                ? NSColor(calibratedWhite: 0.92, alpha: 1.0)
-                : NSColor(calibratedWhite: 0.08, alpha: 1.0)
         }
 
         if fontSize != coordinator.lastAppliedFontSize {
             coordinator.lastAppliedFontSize = fontSize
             wrapper.lineNumberView.fontSize = max(8, fontSize - 3)
             textView.font = NSFont.systemFont(ofSize: fontSize)
-            if let storage = textView.textStorage, storage.length > 0 {
-                storage.addAttribute(.font, value: NSFont.systemFont(ofSize: fontSize), range: NSRange(location: 0, length: storage.length))
+            if let storage = textView.textStorage as? MarkdownTextStorage, storage.length > 0 {
+                storage.baseFontSize = fontSize
+                storage.rehighlightAll(isDark: isDark)
             }
         }
 
@@ -403,16 +397,8 @@ struct MarkdownTextView: NSViewRepresentable {
             // Only update text when content actually changed (cache hit).
             // Skip when text is still the previous file's content (cache miss)
             // to avoid NSTextStorage re-layout flash.
-            if text != textView.string {
-                coordinator.suppressTextDidChange = true
-                textView.string = text
-                coordinator.suppressTextDidChange = false
-                textView.setSelectedRange(NSRange(location: 0, length: 0))
-            }
-            if text.isEmpty {
-                // Content not loaded yet (async in-flight). Phase 2 will
-                // set it when the async load completes.
-            } else {
+            if !text.isEmpty && text != textView.string {
+                coordinator.applyLoadedTextWithoutFlash(text, to: textView, isDark: isDark, fontSize: fontSize)
                 coordinator.pendingContentLoad = false
                 coordinator.scheduleImageProcessing()
                 wrapper.lineNumberView.needsDisplay = true
@@ -433,12 +419,11 @@ struct MarkdownTextView: NSViewRepresentable {
                 return
             }
 
-            coordinator.suppressTextDidChange = true
-            textView.string = text
-            textView.setSelectedRange(NSRange(location: 0, length: 0))
-            coordinator.suppressTextDidChange = false
+            coordinator.applyLoadedTextWithoutFlash(text, to: textView, isDark: isDark, fontSize: fontSize)
             coordinator.scheduleImageProcessing()
             coordinator.editorWrapper?.lineNumberView.needsDisplay = true
+            scrollView.contentView.scroll(to: .zero)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
             if text.isEmpty {
                 textView.window?.makeFirstResponder(textView)
             }
@@ -542,6 +527,18 @@ struct MarkdownTextView: NSViewRepresentable {
                 lastAppliedIsDark = isDark
                 ThemeManager.applyTheme(textView: textView, scrollView: scrollView, lineNumberView: wrapper.lineNumberView, isDark: isDark)
             }
+        }
+
+        func applyLoadedTextWithoutFlash(_ text: String, to textView: NSTextView, isDark: Bool, fontSize: CGFloat) {
+            suppressTextDidChange = true
+            if let storage = textView.textStorage as? MarkdownTextStorage {
+                storage.baseFontSize = fontSize
+                storage.replaceAllPrepared(text, isDark: isDark)
+            } else {
+                textView.string = text
+            }
+            textView.setSelectedRange(NSRange(location: 0, length: 0))
+            suppressTextDidChange = false
         }
 
         func setupScrollMonitor() {

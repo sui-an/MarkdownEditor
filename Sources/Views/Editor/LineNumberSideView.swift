@@ -1,7 +1,6 @@
 import AppKit
 
 /// Standalone view that draws line numbers beside a text view.
-/// Replaces LineNumberRulerView to avoid NSScrollView ruler timing issues.
 final class LineNumberSideView: NSView {
     weak var textView: NSTextView?
 
@@ -25,7 +24,7 @@ final class LineNumberSideView: NSView {
         return s
     }()
 
-    // Newline position cache for O(log n) line number lookup
+    // Newline positions cache
     private var newlinePositions: [Int] = []
     private var cachedTextLength: Int = 0
     private var textChangeObserver: Any?
@@ -53,7 +52,6 @@ final class LineNumberSideView: NSView {
     private func invalidateNewlineCache() {
         cachedTextLength = 0
         newlinePositions.removeAll()
-        needsDisplay = true
     }
 
     private func ensureNewlineCache() {
@@ -65,7 +63,7 @@ final class LineNumberSideView: NSView {
         var positions: [Int] = [0]
         positions.reserveCapacity(currentLength / 40)
         for i in 0..<currentLength {
-            if text.character(at: i) == 10 { // \n
+            if text.character(at: i) == 10 {
                 positions.append(i + 1)
             }
         }
@@ -83,47 +81,53 @@ final class LineNumberSideView: NSView {
               let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer else { return }
 
-        layoutManager.ensureLayout(for: textContainer)
         let visibleRect = textView.visibleRect
+        let containerOrigin = textView.textContainerOrigin
         let textContent = textView.string as NSString
         let textLength = textContent.length
         guard textLength > 0 else { return }
 
-        let extendedRect = NSRect(
-            x: visibleRect.minX,
-            y: max(0, visibleRect.minY - 100),
+        ensureNewlineCache()
+        guard !newlinePositions.isEmpty else { return }
+
+        // Find visible character range from the layout manager
+        let visibleContainerRect = NSRect(
+            x: visibleRect.minX - containerOrigin.x,
+            y: visibleRect.minY - containerOrigin.y,
             width: visibleRect.width,
-            height: visibleRect.height + 200
+            height: visibleRect.height
         )
-        let extGlyphRange = layoutManager.glyphRange(
-            forBoundingRect: extendedRect,
+        let visGlyphRange = layoutManager.glyphRange(
+            forBoundingRect: visibleContainerRect,
             in: textContainer
         )
-        guard extGlyphRange.length > 0 else { return }
+        guard visGlyphRange.length > 0 else { return }
 
-        let charRange = layoutManager.characterRange(
-            forGlyphRange: extGlyphRange,
+        let visCharRange = layoutManager.characterRange(
+            forGlyphRange: visGlyphRange,
             actualGlyphRange: nil
         )
-        guard charRange.location != NSNotFound, charRange.location < textLength else { return }
+        guard visCharRange.location != NSNotFound, visCharRange.location < textLength else { return }
 
-        ensureNewlineCache()
-        // Binary search: find how many newline positions are before charRange.location
-        let lineNumber: Int
-        if charRange.location == 0 {
-            lineNumber = 1
+        // Binary search: find the line number for the first visible character
+        let firstLine: Int
+        if visCharRange.location == 0 {
+            firstLine = 0
         } else {
             var lo = 0, hi = newlinePositions.count
             while lo < hi {
                 let mid = (lo + hi) / 2
-                if newlinePositions[mid] < charRange.location {
+                if newlinePositions[mid] <= visCharRange.location {
                     lo = mid + 1
                 } else {
                     hi = mid
                 }
             }
-            lineNumber = lo + 1
+            firstLine = max(0, lo - 1)
         }
+
+        let labelHeight = font.ascender + abs(font.descender)
+        let padding: CGFloat = 6
 
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
@@ -131,49 +135,47 @@ final class LineNumberSideView: NSView {
             .paragraphStyle: labelParagraphStyle
         ]
 
-        let viewWidth = bounds.width
-        var lineIndex = lineNumber
+        // Calculate right-aligned label width based on total line count
+        let totalLines = newlinePositions.count
+        let digits = "\(totalLines)".count
+        let charWidth = ("0" as NSString).size(withAttributes: attrs).width
+        let labelWidth = charWidth * CGFloat(digits) + padding
 
-        while lineIndex - 1 < newlinePositions.count {
-            let lineStart = newlinePositions[lineIndex - 1]
-            let lineLength: Int
-            if lineIndex < newlinePositions.count {
-                lineLength = newlinePositions[lineIndex] - lineStart
-            } else {
-                lineLength = textLength - lineStart
-            }
-            guard lineLength > 0 else { lineIndex += 1; continue }
+        // Draw line numbers for each visible line
+        for lineIdx in firstLine..<newlinePositions.count {
+            let lineStart = newlinePositions[lineIdx]
+            let lineEnd = lineIdx + 1 < newlinePositions.count ? newlinePositions[lineIdx + 1] : textLength
+            let lineLength = lineEnd - lineStart
+            guard lineLength > 0 else { continue }
+
             let lineRange = NSRange(location: lineStart, length: lineLength)
-
             let glyphRange = layoutManager.glyphRange(
                 forCharacterRange: lineRange,
                 actualCharacterRange: nil
             )
-            guard glyphRange.location != NSNotFound, glyphRange.length > 0 else {
-                lineIndex += 1; continue
-            }
+            guard glyphRange.location != NSNotFound, glyphRange.length > 0 else { continue }
+
             let fragRect = layoutManager.lineFragmentRect(
                 forGlyphAt: glyphRange.location,
                 effectiveRange: nil
             )
 
-            if fragRect.minY > visibleRect.maxY { break }
+            // Convert from textContainer coords to view coords
+            let lineY = fragRect.minY + containerOrigin.y - visibleRect.minY
 
-            if fragRect.maxY >= visibleRect.minY && fragRect.minY <= visibleRect.maxY {
-                let lineStr = "\(lineIndex)"
-                let localY = fragRect.minY - visibleRect.minY
-                    + (fragRect.height - font.pointSize) / 2
-                let labelRect = NSRect(
-                    x: 0, y: localY,
-                    width: viewWidth - 4,
-                    height: font.pointSize
-                )
-                lineStr.draw(in: labelRect, withAttributes: attrs)
-            }
+            // Skip lines fully above or below visible area
+            if lineY + fragRect.height < -labelHeight { continue }
+            if lineY > visibleRect.height + labelHeight { break }
 
-            lineIndex += 1
+            let localY = lineY + (fragRect.height - labelHeight) / 2
+            let lineStr = "\(lineIdx + 1)"
+            let labelRect = NSRect(
+                x: bounds.width - labelWidth - 2,
+                y: localY,
+                width: labelWidth,
+                height: labelHeight
+            )
+            lineStr.draw(in: labelRect, withAttributes: attrs)
         }
     }
 }
-
-

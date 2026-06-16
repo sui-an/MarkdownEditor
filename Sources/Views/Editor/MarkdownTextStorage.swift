@@ -3,6 +3,7 @@ import AppKit
 final class MarkdownTextStorage: NSTextStorage {
     private let backingStore = NSMutableAttributedString()
     var suppressHighlighting = false
+    var baseFontSize: CGFloat = 13
     private var editingNeedsHighlight = false
     private var insideHighlight = false
 
@@ -65,8 +66,16 @@ final class MarkdownTextStorage: NSTextStorage {
 
     override func replaceCharacters(in range: NSRange, with str: String) {
         beginEditing()
+        let newLength = (str as NSString).length
         backingStore.replaceCharacters(in: range, with: str)
-        edited(.editedCharacters, range: range, changeInLength: (str as NSString).length - range.length)
+        if newLength > 0 {
+            backingStore.addAttributes([
+                .foregroundColor: NSColor.textColor,
+                .font: NSFont.systemFont(ofSize: baseFontSize),
+                .strikethroughStyle: 0
+            ], range: NSRange(location: range.location, length: newLength))
+        }
+        edited(.editedCharacters, range: range, changeInLength: newLength - range.length)
         editingNeedsHighlight = true
         endEditing()
     }
@@ -79,6 +88,25 @@ final class MarkdownTextStorage: NSTextStorage {
         endEditing()
     }
 
+    func replaceAllPrepared(_ text: String, isDark: Bool) {
+        let oldLength = backingStore.length
+        let newLength = (text as NSString).length
+        beginEditing()
+        backingStore.replaceCharacters(in: NSRange(location: 0, length: oldLength), with: text)
+        if newLength > 0 {
+            let fullRange = NSRange(location: 0, length: newLength)
+            backingStore.addAttributes([
+                .foregroundColor: NSColor.textColor,
+                .font: NSFont.systemFont(ofSize: baseFontSize),
+                .strikethroughStyle: 0
+            ], range: fullRange)
+            applyHighlightAttributes(in: fullRange, isDark: isDark)
+        }
+        edited([.editedCharacters, .editedAttributes], range: NSRange(location: 0, length: oldLength), changeInLength: newLength - oldLength)
+        editingNeedsHighlight = false
+        endEditing()
+    }
+
     // MARK: - Highlight before display
 
     /// Apply syntax attributes BEFORE `super.endEditing()` triggers the
@@ -88,8 +116,11 @@ final class MarkdownTextStorage: NSTextStorage {
         if editingNeedsHighlight && !suppressHighlighting && !insideHighlight {
             editingNeedsHighlight = false
             insideHighlight = true
-            autoHighlight()
-            insideHighlight = false
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.autoHighlight()
+                self.insideHighlight = false
+            }
         }
         super.endEditing()
     }
@@ -104,33 +135,32 @@ final class MarkdownTextStorage: NSTextStorage {
 
         let isDark = NSApp.effectiveAppearance.name == .darkAqua
 
+        // Clamp editedRange to valid bounds
+        let safeRange = NSRange(location: 0, length: len)
+        let er: NSRange
+        if editedRange.location == NSNotFound || editedRange.location + editedRange.length > len || editedRange.length == 0 {
+            er = safeRange
+        } else {
+            er = NSIntersectionRange(editedRange, safeRange)
+        }
+
         // Compute range: expanded ≈ visible region
-        let lineR = (backingStore.string as NSString).lineRange(for: editedRange)
+        let lineR = (backingStore.string as NSString).lineRange(for: er)
         let paraR = (backingStore.string as NSString).paragraphRange(for: lineR)
         let loc: Int = max(0, paraR.location - 100)
         let e = min(len, paraR.location + paraR.length + 200)
         let syncRange = NSRange(location: loc, length: e - loc)
         guard syncRange.length > 0 else { return }
 
-        let text = backingStore.string as NSString
-        let textLen = text.length
-
-        backingStore.beginEditing()
-        highlightHeaders(in: text, length: textLen, range: syncRange, isDark: isDark)
-        highlightBlockquotes(in: text, length: textLen, range: syncRange, isDark: isDark)
-
-        // Code blocks: only when editing inside a code block.
-        // On initial load (editedRange covers the full file) run unconditionally.
-        if editedRange.length > 100 || isInsideCodeBlock(text, range: editedRange) {
-            highlightCodeBlocks(in: text, length: textLen, range: syncRange, isDark: isDark)
-        }
-
-        highlightInlinePatterns(in: text, length: textLen, range: syncRange, isDark: isDark)
-        highlightLists(in: text, length: textLen, range: syncRange, isDark: isDark)
-        highlightHorizontalRules(in: text, length: textLen, range: syncRange, isDark: isDark)
-        highlightTables(in: text, length: textLen, range: syncRange, isDark: isDark)
-        highlightHTML(in: text, length: textLen, range: syncRange, isDark: isDark)
-        backingStore.endEditing()
+        beginEditing()
+        backingStore.addAttributes([
+            .foregroundColor: NSColor.textColor,
+            .font: NSFont.systemFont(ofSize: baseFontSize),
+            .strikethroughStyle: 0
+        ], range: syncRange)
+        applyHighlightAttributes(in: syncRange, isDark: isDark, includeCodeBlocks: er.length > 100 || isInsideCodeBlock(backingStore.string as NSString, range: er))
+        edited(.editedAttributes, range: syncRange, changeInLength: 0)
+        endEditing()
     }
 
     // MARK: - Full re-highlight (for theme switch)
@@ -140,25 +170,35 @@ final class MarkdownTextStorage: NSTextStorage {
         guard len > 0 else { return }
 
         let fullRange = NSRange(location: 0, length: len)
-        let text = backingStore.string as NSString
-        let textLen = text.length
-
-        backingStore.beginEditing()
-        backingStore.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
-        highlightHeaders(in: text, length: textLen, isDark: isDark)
-        highlightBlockquotes(in: text, length: textLen, isDark: isDark)
-        highlightCodeBlocks(in: text, length: textLen, isDark: isDark)
-        highlightInlinePatterns(in: text, length: textLen, isDark: isDark)
-        highlightLists(in: text, length: textLen, isDark: isDark)
-        highlightHorizontalRules(in: text, length: textLen, isDark: isDark)
-        highlightTables(in: text, length: textLen, isDark: isDark)
-        highlightHTML(in: text, length: textLen, range: nil, isDark: isDark)
-        backingStore.endEditing()
+        beginEditing()
+        backingStore.addAttributes([
+            .foregroundColor: NSColor.textColor,
+            .font: NSFont.systemFont(ofSize: baseFontSize),
+            .strikethroughStyle: 0
+        ], range: fullRange)
+        applyHighlightAttributes(in: fullRange, isDark: isDark)
+        edited(.editedAttributes, range: fullRange, changeInLength: 0)
+        endEditing()
 
         for lm in layoutManagers {
             lm.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
             lm.invalidateDisplay(forCharacterRange: fullRange)
         }
+    }
+
+    private func applyHighlightAttributes(in range: NSRange, isDark: Bool, includeCodeBlocks: Bool = true) {
+        let text = backingStore.string as NSString
+        let textLen = text.length
+        highlightHeaders(in: text, length: textLen, range: range, isDark: isDark)
+        highlightBlockquotes(in: text, length: textLen, range: range, isDark: isDark)
+        if includeCodeBlocks {
+            highlightCodeBlocks(in: text, length: textLen, range: range, isDark: isDark)
+        }
+        highlightInlinePatterns(in: text, length: textLen, range: range, isDark: isDark)
+        highlightLists(in: text, length: textLen, range: range, isDark: isDark)
+        highlightHorizontalRules(in: text, length: textLen, range: range, isDark: isDark)
+        highlightTables(in: text, length: textLen, range: range, isDark: isDark)
+        highlightHTML(in: text, length: textLen, range: range, isDark: isDark)
     }
 }
 
@@ -221,8 +261,14 @@ private enum HighlightColors {
 private extension MarkdownTextStorage {
     func highlightHeaders(in text: NSString, length: Int, range: NSRange? = nil, isDark: Bool) {
         let sr = range ?? NSRange(location: 0, length: length)
+        let sizes: [CGFloat] = [baseFontSize + 11, baseFontSize + 7, baseFontSize + 5, baseFontSize + 3, baseFontSize + 1, baseFontSize]
         for m in Self.headerRegex.matches(in: text as String, range: sr) {
+            let headerText = text.substring(with: m.range)
+            var level = 0
+            for ch in headerText { if ch == "#" { level += 1 } else { break } }
+            let hSize = sizes[max(0, min(level, sizes.count) - 1)]
             backingStore.addAttribute(.foregroundColor, value: HighlightColors.header(isDark), range: m.range)
+            backingStore.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: hSize), range: m.range)
         }
     }
 
@@ -326,7 +372,6 @@ private extension MarkdownTextStorage {
     }
 
     func highlightTables(in text: NSString, length: Int, range: NSRange? = nil, isDark: Bool) {
-        let sr = range ?? NSRange(location: 0, length: length)
         // Table highlighting not implemented yet
     }
 
