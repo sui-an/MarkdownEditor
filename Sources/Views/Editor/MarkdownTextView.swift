@@ -193,9 +193,9 @@ final class EditorScrollView: NSScrollView {
                     contentView.bounds = bounds
                 }
                 pendingRestoreOffset = savedOffset
+            }
         }
     }
-}
 }
 
 // MARK: - Notes-style background color
@@ -440,10 +440,6 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
 
-#if DEBUG
-        let tSync = CACurrentMediaTime()
-        print("[perf] 📝 Phase3 sync textView.string (textView!=text)")
-#endif
         coordinator.hasInlineImages = text.contains("![")
         coordinator.hasInlineImageAttachments = false
         coordinator.suppressTextDidChange = true
@@ -457,10 +453,6 @@ struct MarkdownTextView: NSViewRepresentable {
             textView.window?.makeFirstResponder(textView)
         }
         wrapper.lineNumberView.needsDisplay = true
-#if DEBUG
-        let syncDt = (CACurrentMediaTime() - tSync) * 1000
-        print("[perf] 📝 Phase3 sync done \(String(format: "%.3f", syncDt))ms")
-#endif
     }
 
     // MARK: - Coordinator

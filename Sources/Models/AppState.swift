@@ -22,10 +22,6 @@ extension NSAlert {
         alert.alertStyle = .warning
         alert.runModal()
     }
-
-    static func showWarning(message: String, informative: String) {
-        showError(message: message, informative: informative)
-    }
 }
 
 // MARK: - HTML Cache Entry
@@ -132,18 +128,13 @@ final class AppState {
     /// All open file contents kept in memory so switching tabs requires zero disk IO.
     /// Populated by loadFileContent, updated by user edits, evicted on file close.
     private var fileContents: [URL: String] = [:]
-    /// LRU access order for fileContents eviction (most recent at end).
-    private var fileContentAccessOrder: [URL] = []
     /// Maximum entries in fileContents — matches htmlCache countLimit.
     private let fileContentCacheLimit = 20
-    /// Content hash of the last saved/loaded version for each file.
-    /// Used to detect external file modifications (via folder watcher).
-    private var fileSavedHashes: [URL: String] = [:]
 
     // MARK: - Performance: HTML cache + operation cancellation
 
     /// LRU HTML cache keyed by file URL. NSCache handles eviction under memory pressure.
-    private let htmlCache = NSCache<NSURL, CachedHTML>()
+    private let htmlCache = NSCache<NSString, CachedHTML>()
 
     /// Monotonically increasing generation counter. Incremented on each file switch;
     /// stale background tasks whose token no longer match silently discard results.
@@ -168,11 +159,6 @@ final class AppState {
     /// Content hash of the last cached version for a given URL. Avoids re-parsing
     /// when content hasn't actually changed (e.g. switching tabs).
     private var cachedContentHash: [URL: String] = [:]
-
-    /// Secondary HTML cache — deterministic LRU, NOT affected by memory pressure
-    /// (unlike NSCache which may purge entries at any time). Ensures recently
-    /// rendered HTML is available instantly on file switch, even after a cache purge.
-    private var cachedHTML = LRUCache<URL, CachedHTML>(limit: 10)
 
     init() {
         htmlCache.countLimit = 20
@@ -569,22 +555,12 @@ final class AppState {
             if let content = fileContents.removeValue(forKey: oldURL) {
                 fileContents[newURL] = content
             }
-            if let hash = fileSavedHashes.removeValue(forKey: oldURL) {
-                fileSavedHashes[newURL] = hash
-            }
-            if let idx = fileContentAccessOrder.firstIndex(of: oldURL) {
-                fileContentAccessOrder[idx] = newURL
-            }
             if let hash = cachedContentHash.removeValue(forKey: oldURL) {
                 cachedContentHash[newURL] = hash
             }
-            if let cached = htmlCache.object(forKey: oldURL as NSURL) {
-                htmlCache.removeObject(forKey: oldURL as NSURL)
-                htmlCache.setObject(cached, forKey: newURL as NSURL, cost: cached.html.utf8.count)
-            }
-            if let cached = cachedHTML.value(for: oldURL) {
-                cachedHTML.removeValue(for: oldURL)
-                cachedHTML.set(cached, for: newURL)
+            if let cached = htmlCache.object(forKey: oldURL.path as NSString) {
+                htmlCache.removeObject(forKey: oldURL.path as NSString)
+                htmlCache.setObject(cached, forKey: newURL.path as NSString, cost: cached.html.utf8.count)
             }
         } else {
             // Clean up caches for non-current renamed item
@@ -750,27 +726,16 @@ final class AppState {
         // Try cache FIRST — in-memory content cache (zero disk IO) then HTML cache.
         let cacheKey = quickHashForCacheCheck(url: url)
         if let cachedContent = fileContents[url],
-            fileSavedHashes[url] == cacheKey {
+            cachedContentHash[url] == cacheKey {
             // In-memory content cache hit — same content as on disk.
             // Zero IO: content was kept from previous load or edit.
-            if let cached = htmlCache.object(forKey: url as NSURL),
+            if let cached = htmlCache.object(forKey: url.path as NSString),
                cachedContentHash[url] == cacheKey {
                 renderedHTML = cached.html
                 renderedBodyHTML = cached.bodyHTML
                 // Defer editor-side state to next cycle so the sidebar
                 // highlight updates immediately (no same-cycle objectWillChange
                 // cascade from currentFileContent dragging sidebar re-eval).
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, token == self.generation else { return }
-                    lastSavedContent = cachedContent
-                    isFileDirty = false
-                    currentFileContent = cachedContent
-                }
-                return
-            }
-            if let cached = cachedHTML.value(for: url) {
-                renderedHTML = cached.html
-                renderedBodyHTML = cached.bodyHTML
                 DispatchQueue.main.async { [weak self] in
                     guard let self, token == self.generation else { return }
                     lastSavedContent = cachedContent
@@ -840,9 +805,8 @@ final class AppState {
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     let cached = CachedHTML(html: fullHTML, bodyHTML: bodyHTML)
-                    htmlCache.setObject(cached, forKey: url as NSURL, cost: fullHTML.utf8.count)
+                    htmlCache.setObject(cached, forKey: url.path as NSString, cost: fullHTML.utf8.count)
                     cachedContentHash[url] = cacheKey
-                    cacheRenderedHTML(cached, for: url)
                     guard token == self.generation else { return }
                     renderedHTML = fullHTML
                     renderedBodyHTML = bodyHTML
@@ -886,9 +850,8 @@ final class AppState {
         DispatchQueue.main.async { [weak self] in
             guard let self, token == self.generation else { return }
             let cached = CachedHTML(html: fullHTML, bodyHTML: bodyHTML)
-            self.htmlCache.setObject(cached, forKey: url as NSURL, cost: fullHTML.utf8.count)
+            self.htmlCache.setObject(cached, forKey: url.path as NSString, cost: fullHTML.utf8.count)
             self.cachedContentHash[url] = cacheKey
-            self.cacheRenderedHTML(cached, for: url)
             self.renderedHTML = fullHTML
             self.renderedBodyHTML = bodyHTML
         }
@@ -980,7 +943,7 @@ final class AppState {
             isFileDirty = false
             // Keep currentFileContent in sync
             currentFileContent = content
-            fileSavedHashes[url] = quickHashForCacheCheck(url: url)
+            cachedContentHash[url] = quickHashForCacheCheck(url: url)
         } catch {
             let alert = NSAlert()
             alert.messageText = "Cannot Save File"
@@ -1025,35 +988,20 @@ final class AppState {
     /// so the dictionary doesn't grow unboundedly as files are opened over time.
     private func cacheFileContent(_ content: String, for url: URL, cacheKey: String) {
         fileContents[url] = content
-        fileSavedHashes[url] = cacheKey
-        if let idx = fileContentAccessOrder.firstIndex(of: url) {
-            fileContentAccessOrder.remove(at: idx)
-        }
-        fileContentAccessOrder.append(url)
+        cachedContentHash[url] = cacheKey
         if fileContents.count > fileContentCacheLimit,
-           let evicted = fileContentAccessOrder.first {
-            fileContentAccessOrder.removeFirst()
+           let evicted = fileContents.keys.first {
             fileContents.removeValue(forKey: evicted)
-            fileSavedHashes.removeValue(forKey: evicted)
             cachedContentHash.removeValue(forKey: evicted)
-            htmlCache.removeObject(forKey: evicted as NSURL)
-            cachedHTML.removeValue(for: evicted)
+            htmlCache.removeObject(forKey: evicted.path as NSString)
         }
-    }
-
-    /// Stores rendered HTML in the secondary LRU cache (survives NSCache purges).
-    private func cacheRenderedHTML(_ cached: CachedHTML, for url: URL) {
-        cachedHTML.set(cached, for: url)
     }
 
     /// Evicts all cache entries for a given file URL.
     private func evictFileFromAllCaches(_ url: URL) {
-        htmlCache.removeObject(forKey: url as NSURL)
+        htmlCache.removeObject(forKey: url.path as NSString)
         cachedContentHash.removeValue(forKey: url)
         fileContents.removeValue(forKey: url)
-        fileSavedHashes.removeValue(forKey: url)
-        fileContentAccessOrder.removeAll { $0 == url }
-        cachedHTML.removeValue(for: url)
     }
 
     // MARK: - File System Changes
@@ -1082,7 +1030,7 @@ final class AppState {
             if selectedFileURL == url {
                 if FileManager.default.fileExists(atPath: url.path) {
                     let cacheKey = quickHashForCacheCheck(url: url)
-                    if fileSavedHashes[url] != cacheKey {
+                    if cachedContentHash[url] != cacheKey {
                         promptExternalChange(for: url)
                     }
                 } else {
@@ -1166,10 +1114,7 @@ final class AppState {
         rootFolders.removeAll()
         openFiles.removeAll()
         fileContents.removeAll()
-        fileContentAccessOrder.removeAll()
-        fileSavedHashes.removeAll()
         cachedContentHash.removeAll()
-        cachedHTML.removeAll()
         htmlCache.removeAllObjects()
         fileIndex.removeAll()
         selectedFileID = nil

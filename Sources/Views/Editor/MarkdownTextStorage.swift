@@ -129,9 +129,24 @@ final class MarkdownTextStorage: NSTextStorage {
         super.processEditing()
     }
 
+    private enum HighlightQuality {
+        case full    // < 200K chars — all patterns
+        case medium  // 200K-500K chars — headers, bold, italic, code blocks only
+        case low     // > 500K chars — headers only
+    }
+
     private func autoHighlight() {
         let len = backingStore.length
-        guard len > 0, len < 200_000 else { return }
+        guard len > 0 else { return }
+
+        let quality: HighlightQuality
+        if len < 200_000 {
+            quality = .full
+        } else if len < 500_000 {
+            quality = .medium
+        } else {
+            quality = .low
+        }
 
         let isDark = NSApp.effectiveAppearance.name == .darkAqua
 
@@ -158,7 +173,7 @@ final class MarkdownTextStorage: NSTextStorage {
             .font: NSFont.systemFont(ofSize: baseFontSize),
             .strikethroughStyle: 0
         ], range: syncRange)
-        applyHighlightAttributes(in: syncRange, isDark: isDark, includeCodeBlocks: er.length > 100 || isInsideCodeBlock(backingStore.string as NSString, range: er))
+        applyHighlightAttributes(in: syncRange, isDark: isDark, includeCodeBlocks: er.length > 100 || isInsideCodeBlock(backingStore.string as NSString, range: er), quality: quality)
         edited(.editedAttributes, range: syncRange, changeInLength: 0)
         endEditing()
     }
@@ -186,19 +201,25 @@ final class MarkdownTextStorage: NSTextStorage {
         }
     }
 
-    private func applyHighlightAttributes(in range: NSRange, isDark: Bool, includeCodeBlocks: Bool = true) {
+    private func applyHighlightAttributes(in range: NSRange, isDark: Bool, includeCodeBlocks: Bool = true, quality: HighlightQuality = .full) {
         let text = backingStore.string as NSString
         let textLen = text.length
         highlightHeaders(in: text, length: textLen, range: range, isDark: isDark)
+        guard quality != .low else { return }
+
         highlightBlockquotes(in: text, length: textLen, range: range, isDark: isDark)
+        highlightLists(in: text, length: textLen, range: range, isDark: isDark)
+        highlightHorizontalRules(in: text, length: textLen, range: range, isDark: isDark)
+        highlightHTML(in: text, length: textLen, range: range, isDark: isDark)
+        guard quality != .medium else { return }
+
+        highlightInlinePatterns(in: text, length: textLen, range: range, isDark: isDark)
+        // Code blocks highlighted last so they overwrite header foregroundColor
+        // and font for lines like `# comment` that match header regex but are
+        // inside fenced code blocks.
         if includeCodeBlocks {
             highlightCodeBlocks(in: text, length: textLen, range: range, isDark: isDark)
         }
-        highlightInlinePatterns(in: text, length: textLen, range: range, isDark: isDark)
-        highlightLists(in: text, length: textLen, range: range, isDark: isDark)
-        highlightHorizontalRules(in: text, length: textLen, range: range, isDark: isDark)
-        highlightTables(in: text, length: textLen, range: range, isDark: isDark)
-        highlightHTML(in: text, length: textLen, range: range, isDark: isDark)
     }
 }
 
@@ -298,7 +319,9 @@ private extension MarkdownTextStorage {
                     if pos < end { pos += 1 }
                 } else {
                     let blockEnd = pos + 3
-                    backingStore.addAttribute(.foregroundColor, value: HighlightColors.code(isDark), range: NSRange(location: blockStart, length: blockEnd - blockStart))
+                    let range = NSRange(location: blockStart, length: blockEnd - blockStart)
+                    backingStore.addAttribute(.foregroundColor, value: HighlightColors.code(isDark), range: range)
+                    backingStore.addAttribute(.font, value: NSFont.systemFont(ofSize: baseFontSize), range: range)
                     inCode = false; pos += 3
                 }
                 continue
@@ -369,10 +392,6 @@ private extension MarkdownTextStorage {
         for m in Self.horizontalRuleRegex.matches(in: text as String, range: sr) {
             backingStore.addAttribute(.foregroundColor, value: HighlightColors.hr(isDark), range: m.range(at: 1))
         }
-    }
-
-    func highlightTables(in text: NSString, length: Int, range: NSRange? = nil, isDark: Bool) {
-        // Table highlighting not implemented yet
     }
 
     func highlightHTML(in text: NSString, length: Int, range: NSRange? = nil, isDark: Bool) {

@@ -95,18 +95,6 @@ enum FileService {
         }
     }
 
-    static func ensureAssetsDirectory(for mdFileURL: URL) throws -> URL {
-        let assetsURL = mdFileURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("assets", isDirectory: true)
-
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: assetsURL.path) {
-            try fm.createDirectory(at: assetsURL, withIntermediateDirectories: true)
-        }
-        return assetsURL
-    }
-
     static func isSupportedFileExtension(_ ext: String) -> Bool {
         switch ext.lowercased() {
         case "md", "markdown", "mkd", "html", "htm": return true
@@ -114,37 +102,4 @@ enum FileService {
         }
     }
 
-    private static let imageDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyyMMdd_HHmmss"
-        return f
-    }()
-
-    static func saveImage(_ data: Data, extension ext: String, relativeTo mdFileURL: URL) throws -> URL {
-        let assetsURL = try ensureAssetsDirectory(for: mdFileURL)
-        let timestamp = Self.imageDateFormatter.string(from: Date())
-        let filename = "image_\(timestamp).\(ext)"
-        let fileURL = assetsURL.appendingPathComponent(filename)
-        try data.write(to: fileURL)
-        return fileURL
     }
-
-    static func relativePath(from mdFileURL: URL, to imageURL: URL) -> String {
-        let mdDir = mdFileURL.deletingLastPathComponent().path
-        let imgPath = imageURL.path
-        var mdComponents = mdDir.components(separatedBy: "/")
-        var imgComponents = imgPath.components(separatedBy: "/")
-
-        while !mdComponents.isEmpty && !imgComponents.isEmpty && mdComponents[0] == imgComponents[0] {
-            mdComponents.removeFirst()
-            imgComponents.removeFirst()
-        }
-
-        var relative = ""
-        for _ in mdComponents {
-            relative += "../"
-        }
-        relative += imgComponents.joined(separator: "/")
-        return relative
-    }
-}
