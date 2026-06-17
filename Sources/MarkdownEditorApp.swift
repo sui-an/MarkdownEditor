@@ -352,6 +352,12 @@ struct MarkdownEditorApp: App {
                 SaveCommand()
             }
 
+            CommandGroup(after: .pasteboard) {
+                Divider()
+                FindCommand()
+                FindAndReplaceCommand()
+            }
+
             SidebarCommands()
 
             CommandGroup(before: .toolbar) {
@@ -480,5 +486,25 @@ struct ThemePickerCommand: View {
             Text("Light").tag("light")
             Text("Dark").tag("dark")
         }
+    }
+}
+
+// MARK: - Find / Replace Commands
+
+struct FindCommand: View {
+    var body: some View {
+        Button("Find...") {
+            focusedAppState()?.openSearch(replaceExpanded: false)
+        }
+        .keyboardShortcut("f", modifiers: .command)
+    }
+}
+
+struct FindAndReplaceCommand: View {
+    var body: some View {
+        Button("Find and Replace...") {
+            focusedAppState()?.openSearch(replaceExpanded: true)
+        }
+        .keyboardShortcut("f", modifiers: [.command, .option])
     }
 }

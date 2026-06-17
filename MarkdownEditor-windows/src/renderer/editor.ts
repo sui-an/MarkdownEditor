@@ -149,6 +149,10 @@ export class Editor {
     })
   }
 
+  getContent(): string {
+    return this.view?.state.doc.toString() || ''
+  }
+
   setContent(content: string): void {
     const current = this.view.state.doc.toString()
     if (content !== current) {
@@ -259,6 +263,27 @@ export class Editor {
 
   clearSearch(): void {
     this.view.dispatch({ effects: setSearchDecos.of(Decoration.none) })
+  }
+
+  replace(query: string, replacement: string): number {
+    if (!query) return 0
+    const lowerQ = query.toLowerCase()
+    const fullText = this.view.state.doc.sliceString(0)
+    const lowerFullText = fullText.toLowerCase()
+    let pos = 0, count = 0
+    const replacements: {from: number, to: number, insert: string}[] = []
+    while ((pos = lowerFullText.indexOf(lowerQ, pos)) !== -1) {
+      replacements.push({from: pos, to: pos + query.length, insert: replacement})
+      count++
+      pos = pos + query.length
+    }
+    if (replacements.length > 0) {
+      this.view.dispatch({
+        changes: replacements,
+        annotations: Transaction.addToHistory.of(false),
+      })
+    }
+    return count
   }
 
   focus(): void {

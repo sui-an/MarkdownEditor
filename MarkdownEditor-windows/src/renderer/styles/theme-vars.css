@@ -4,6 +4,7 @@
   --preview-bg: #ffffff;
   --titlebar-bg: #ebebf0;
   --accent: #007aff;
+  --accent-hover: #0056b3;
   --separator: #c6c6c8;
   --text-primary: #1c1c1e;
   --text-secondary: #636366;
@@ -22,6 +23,7 @@
   --preview-bg: #1c1c21;
   --titlebar-bg: #1c1c1e;
   --accent: #0a84ff;
+  --accent-hover: #0066cc;
   --separator: #38383a;
   --text-primary: #ebebeb;
   --text-secondary: #98989d;

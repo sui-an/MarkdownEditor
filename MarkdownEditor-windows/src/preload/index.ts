@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   watchFolder: (path: string): Promise<string | null> => ipcRenderer.invoke('watcher:start', path),
   unwatchFolder: (id: string): Promise<void> => ipcRenderer.invoke('watcher:stop', id),
   onFileChanged: (callback: (event: Electron.IpcRendererEvent, data: FileChangeEvent) => void) => {
+    ipcRenderer.removeAllListeners('file-changed')
     ipcRenderer.on('file-changed', callback)
   },
   removeFileChangedListener: () => {
@@ -32,7 +33,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   restoreSession: (): Promise<SessionData> => ipcRenderer.invoke('session:restore'),
   showMessageBox: (options: Electron.MessageBoxOptions): Promise<number> => ipcRenderer.invoke('dialog:messageBox', options),
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
-  showItemInFolder: (filePath: string): void => { ipcRenderer.invoke('file:showInFolder', filePath) },
+  showItemInFolder: (filePath: string): Promise<{success: boolean; error?: string}> => 
+    ipcRenderer.invoke('file:showInFolder', filePath),
+  renameFile: (oldPath: string, newName: string): Promise<{success: boolean; newPath?: string; error?: string}> =>
+    ipcRenderer.invoke('file:rename', oldPath, newName),
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   maximizeWindow: () => ipcRenderer.invoke('window:maximize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),

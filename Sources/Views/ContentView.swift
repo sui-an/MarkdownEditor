@@ -116,17 +116,20 @@ struct ContentView: View {
                 appState.outlinePanel?.updateHeadings(headings)
             }
             .overlay(alignment: Alignment.top) {
-                if appState.previewOnly && appState.showPreviewSearch {
-                    PreviewSearchOverlay(
-                        webView: { [appState] in appState.viewRefs.webView },
-                        viewRefs: appState.viewRefs,
-                        onClose: {
-                            appState.showPreviewSearch = false
-                        }
-                    )
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .animation(.easeInOut(duration: 0.15), value: appState.showPreviewSearch)
-                    .zIndex(100)
+                 if appState.showSearch {
+                     SearchOverlay(
+                         webView: { [appState] in appState.viewRefs.webView },
+                         textView: { [appState] in appState.viewRefs.textView },
+                         viewRefs: appState.viewRefs,
+                         replaceExpanded: appState.searchReplaceExpanded,
+                         commandId: appState.searchCommandID,
+                         onClose: {
+                             appState.showSearch = false
+                         }
+                     )
+                     .transition(.move(edge: .top).combined(with: .opacity))
+                     .animation(.easeInOut(duration: 0.15), value: appState.showSearch)
+                     .zIndex(100)
                 }
             }
             .toolbar(id: "main") {
@@ -197,11 +200,6 @@ struct ContentView: View {
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .allowsHitTesting(false)
-            Button("") { toggleSearch() }
-                .keyboardShortcut("f", modifiers: .command)
-                .frame(width: 0, height: 0)
-                .opacity(0)
-                .allowsHitTesting(false)
             Button("") { appState.closeCurrentFile() }
                 .keyboardShortcut("w", modifiers: .command)
                 .frame(width: 0, height: 0)
@@ -250,26 +248,6 @@ struct ContentView: View {
         appState.windowSessionID = WindowSessionCoordinator.shared.register(
             files: appState.openFiles.map { $0.url }
         )
-    }
-
-    private func toggleSearch() {
-        if appState.previewOnly {
-            appState.showPreviewSearch = true
-        } else {
-            if appState.searchPanel?.isVisible == true {
-                appState.searchPanel?.close()
-                appState.searchPanel = nil
-            } else {
-                appState.searchPanel?.close()
-                let panel = SearchPanel(
-                    searchState: appState.searchState,
-                    textView: { [appState] in appState.viewRefs.textView },
-                    webView: { [appState] in appState.viewRefs.webView },
-                    viewRefs: appState.viewRefs
-                )
-                appState.searchPanel = panel
-            }
-        }
     }
 
     private func toggleOutline() {

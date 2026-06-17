@@ -97,9 +97,10 @@ final class AppState {
     let viewRefs = ViewRefs()
     var fontSize: CGFloat = AppState.loadFontSize()
     var themeChangeCount = 0
-    var showPreviewSearch = false
+    var showSearch = false
+    var searchCommandID = 0
     @ObservationIgnored var outlinePanel: OutlinePanelWindow?
-    @ObservationIgnored var searchPanel: SearchPanel?
+    @ObservationIgnored var searchReplaceExpanded = false
     @ObservationIgnored var windowSessionID: UUID?
     @ObservationIgnored private var themeObserver: Any?
 
@@ -115,9 +116,7 @@ final class AppState {
 
     /// All open file contents kept in memory so switching tabs requires zero disk IO.
     /// Populated by loadFileContent, updated by user edits, evicted on file close.
-    private var fileContents: [URL: String] = [:]
-    /// Maximum entries in fileContents — matches htmlCache countLimit.
-    private let fileContentCacheLimit = 20
+    private let fileCache = FileContentCache()
 
     // MARK: - Performance: HTML cache + operation cancellation
 
@@ -143,10 +142,6 @@ final class AppState {
     /// Using the same generation counter as HTML would let stale outline
     /// results overwrite fresh ones (since outline doesn't increment it).
     private var outlineGeneration: Int64 = 0
-
-    /// Content hash of the last cached version for a given URL. Avoids re-parsing
-    /// when content hasn't actually changed (e.g. switching tabs).
-    private var cachedContentHash: [URL: String] = [:]
 
     init() {
         htmlCache.countLimit = 20
@@ -308,12 +303,13 @@ final class AppState {
             return
         }
 
-        evictFileFromAllCaches(url)
+        fileCache.evict(url)
+        htmlCache.removeObject(forKey: url.path as NSString)
 
         do {
             let content = try FileService.readFile(at: url)
-            let cacheKey = quickHashForCacheCheck(url: url)
-            cacheFileContent(content, for: url, cacheKey: cacheKey)
+            let cacheKey = FileContentCache.quickHash(url: url)
+            fileCache.set(content, for: url, hash: cacheKey)
             if selectedFileID == id {
                 currentFileContent = content
                 lastSavedContent = content
@@ -334,7 +330,8 @@ final class AppState {
     func closeFile(id: String) {
         saveCurrentFileIfDirty()
         if let item = openFiles.first(where: { $0.id == id }) {
-            evictFileFromAllCaches(item.url)
+            fileCache.evict(item.url)
+            htmlCache.removeObject(forKey: item.url.path as NSString)
         }
         openFiles.removeAll { $0.id == id }
         fileIndex.removeValue(forKey: id)
@@ -375,7 +372,8 @@ final class AppState {
         let oldFiles = Set(oldFolder.allFiles.filter { !$0.isDirectory }.map { $0.url })
         let newFiles = Set(newRoot.allFiles.filter { !$0.isDirectory }.map { $0.url })
         for fileURL in oldFiles.subtracting(newFiles) {
-            evictFileFromAllCaches(fileURL)
+            fileCache.evict(fileURL)
+            htmlCache.removeObject(forKey: fileURL.path as NSString)
         }
 
         let updatedRoot = FileTreeItem(
@@ -413,7 +411,8 @@ final class AppState {
         }
 
         for file in folder.allFiles {
-            evictFileFromAllCaches(file.url)
+            fileCache.evict(file.url)
+            htmlCache.removeObject(forKey: file.url.path as NSString)
         }
 
         folderWatchers[id]?.stop()
@@ -540,19 +539,15 @@ final class AppState {
             selectedFileURL = newURL
             selectedFileID = updatedItem.id
             // Migrate cache keys
-            if let content = fileContents.removeValue(forKey: oldURL) {
-                fileContents[newURL] = content
-            }
-            if let hash = cachedContentHash.removeValue(forKey: oldURL) {
-                cachedContentHash[newURL] = hash
-            }
+            fileCache.migrate(from: oldURL, to: newURL)
             if let cached = htmlCache.object(forKey: oldURL.path as NSString) {
                 htmlCache.removeObject(forKey: oldURL.path as NSString)
                 htmlCache.setObject(cached, forKey: newURL.path as NSString, cost: cached.html.utf8.count)
             }
         } else {
             // Clean up caches for non-current renamed item
-            evictFileFromAllCaches(oldURL)
+            fileCache.evict(oldURL)
+            htmlCache.removeObject(forKey: oldURL.path as NSString)
         }
 
         // Update selectedDirectoryID if it was the renamed item
@@ -670,7 +665,7 @@ final class AppState {
     func selectFile(id: String) {
         // Note: saveCurrentFileIfDirty intentionally NOT called here to avoid
         // blocking the main thread during rapid file switching. The previous
-        // file's dirty content is held in fileContents cache and saved when
+        // file's dirty content is held in fileCache and saved when
         // the file is closed, the window is closed, or Cmd+S is pressed.
         guard let item = fileIndex[id] else { return }
         loadFileContent(url: item.url, id: item.id)
@@ -712,13 +707,13 @@ final class AppState {
         currentFileURL = url
 
         // Try cache FIRST — in-memory content cache (zero disk IO) then HTML cache.
-        let cacheKey = quickHashForCacheCheck(url: url)
-        if let cachedContent = fileContents[url],
-            cachedContentHash[url] == cacheKey {
+        let cacheKey = FileContentCache.quickHash(url: url)
+        if let cachedContent = fileCache.content(for: url),
+            fileCache.hash(for: url) == cacheKey {
             // In-memory content cache hit — same content as on disk.
             // Zero IO: content was kept from previous load or edit.
             if let cached = htmlCache.object(forKey: url.path as NSString),
-               cachedContentHash[url] == cacheKey {
+               fileCache.hash(for: url) == cacheKey {
                 renderedHTML = cached.html
                 renderedBodyHTML = cached.bodyHTML
                 // Defer editor-side state to next cycle so the sidebar
@@ -764,7 +759,7 @@ final class AppState {
 
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
-                    cacheFileContent(content, for: url, cacheKey: cacheKey)
+                    fileCache.set(content, for: url, hash: cacheKey)
                     guard token == self.generation else { return }
                     lastSavedContent = content
                     isFileDirty = false
@@ -794,7 +789,7 @@ final class AppState {
                     guard let self else { return }
                     let cached = CachedHTML(html: fullHTML, bodyHTML: bodyHTML)
                     htmlCache.setObject(cached, forKey: url.path as NSString, cost: fullHTML.utf8.count)
-                    cachedContentHash[url] = cacheKey
+                    fileCache.set(currentFileContent, for: url, hash: cacheKey)
                     guard token == self.generation else { return }
                     renderedHTML = fullHTML
                     renderedBodyHTML = bodyHTML
@@ -839,7 +834,7 @@ final class AppState {
             guard let self, token == self.generation else { return }
             let cached = CachedHTML(html: fullHTML, bodyHTML: bodyHTML)
             self.htmlCache.setObject(cached, forKey: url.path as NSString, cost: fullHTML.utf8.count)
-            self.cachedContentHash[url] = cacheKey
+            self.fileCache.set(self.currentFileContent, for: url, hash: cacheKey)
             self.renderedHTML = fullHTML
             self.renderedBodyHTML = bodyHTML
         }
@@ -853,8 +848,8 @@ final class AppState {
         // Only update cache on actual edits, not programmatic loads (file
         // switches) where loadFileContent already cached the content.
         if isFileDirty, let url = currentFileURL {
-            let cacheKey = quickHashForCacheCheck(url: url)
-            cacheFileContent(newContent, for: url, cacheKey: cacheKey)
+            let cacheKey = FileContentCache.quickHash(url: url)
+            fileCache.set(newContent, for: url, hash: cacheKey)
         }
 
         // Always refresh outline — even on file load (isFileDirty = false)
@@ -881,7 +876,7 @@ final class AppState {
         let content = currentFileContent
         guard let url = currentFileURL else { return }
         let token = generation  // capture current generation
-        let cacheKey = quickHashForCacheCheck(url: url)
+        let cacheKey = FileContentCache.quickHash(url: url)
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self, token == self.generation else { return }
@@ -931,7 +926,7 @@ final class AppState {
             isFileDirty = false
             // Keep currentFileContent in sync
             currentFileContent = content
-            cachedContentHash[url] = quickHashForCacheCheck(url: url)
+            fileCache.set(content, for: url, hash: FileContentCache.quickHash(url: url))
         } catch {
             let alert = NSAlert()
             alert.messageText = "Cannot Save File"
@@ -962,36 +957,6 @@ final class AppState {
         renderedBodyHTML = ""
     }
 
-    // MARK: - Cache helpers
-
-    /// Fast file-modification check without reading content. Returns "" if file doesn't exist.
-    private func quickHashForCacheCheck(url: URL) -> String {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let modDate = attrs[.modificationDate] as? Date,
-              let size = attrs[.size] as? Int else { return "" }
-        return "\(size):\(Int(modDate.timeIntervalSince1970))"
-    }
-
-    /// Stores file content in the in-memory cache and enforces LRU eviction
-    /// so the dictionary doesn't grow unboundedly as files are opened over time.
-    private func cacheFileContent(_ content: String, for url: URL, cacheKey: String) {
-        fileContents[url] = content
-        cachedContentHash[url] = cacheKey
-        if fileContents.count > fileContentCacheLimit,
-           let evicted = fileContents.keys.first {
-            fileContents.removeValue(forKey: evicted)
-            cachedContentHash.removeValue(forKey: evicted)
-            htmlCache.removeObject(forKey: evicted.path as NSString)
-        }
-    }
-
-    /// Evicts all cache entries for a given file URL.
-    private func evictFileFromAllCaches(_ url: URL) {
-        htmlCache.removeObject(forKey: url.path as NSString)
-        cachedContentHash.removeValue(forKey: url)
-        fileContents.removeValue(forKey: url)
-    }
-
     // MARK: - File System Changes
 
     private func handleFileSystemChanges(rootFolderID: String, urls: [URL]) {
@@ -1017,8 +982,8 @@ final class AppState {
 
             if selectedFileURL == url {
                 if FileManager.default.fileExists(atPath: url.path) {
-                    let cacheKey = quickHashForCacheCheck(url: url)
-                    if cachedContentHash[url] != cacheKey {
+                    let cacheKey = FileContentCache.quickHash(url: url)
+                    if fileCache.hash(for: url) != cacheKey {
                         promptExternalChange(for: url)
                     }
                 } else {
@@ -1032,7 +997,8 @@ final class AppState {
     private func removeFileFromFolder(rootFolderID: String, url: URL) {
         guard let idx = rootFolders.firstIndex(where: { $0.id == rootFolderID }) else { return }
         removeFileRecursively(from: &rootFolders[idx], url: url)
-        evictFileFromAllCaches(url)
+        fileCache.evict(url)
+        htmlCache.removeObject(forKey: url.path as NSString)
     }
 
     private func removeFileRecursively(from item: inout FileTreeItem, url: URL) {
@@ -1089,6 +1055,13 @@ final class AppState {
         }
     }
 
+    /// Opens the search overlay.
+    func openSearch(replaceExpanded: Bool = false) {
+        searchReplaceExpanded = replaceExpanded
+        searchCommandID += 1
+        showSearch = true
+    }
+
     /// Break observation chains before deinit to prevent SwiftUI StoredLocation
     /// recursive deallocation crashes during view hierarchy teardown.
     /// Call when the owning view disappears or is about to be deallocated.
@@ -1101,8 +1074,7 @@ final class AppState {
         folderWatchers.removeAll()
         rootFolders.removeAll()
         openFiles.removeAll()
-        fileContents.removeAll()
-        cachedContentHash.removeAll()
+        fileCache.removeAll()
         htmlCache.removeAllObjects()
         fileIndex.removeAll()
         selectedFileID = nil
@@ -1115,8 +1087,7 @@ final class AppState {
         renderedBodyHTML = ""
         outlinePanel?.close()
         outlinePanel = nil
-        searchPanel?.close()
-        searchPanel = nil
+        showSearch = false
         windowSessionID = nil
         if let observer = themeObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -1146,11 +1117,12 @@ final class AppState {
     }
 
     private func reloadExternallyChangedFile(url: URL) {
-        evictFileFromAllCaches(url)
+        fileCache.evict(url)
+        htmlCache.removeObject(forKey: url.path as NSString)
         do {
             let content = try FileService.readFile(at: url)
-            let cacheKey = quickHashForCacheCheck(url: url)
-            cacheFileContent(content, for: url, cacheKey: cacheKey)
+            let cacheKey = FileContentCache.quickHash(url: url)
+            fileCache.set(content, for: url, hash: cacheKey)
             currentFileContent = content
             lastSavedContent = content
             isFileDirty = false

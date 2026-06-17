@@ -17,7 +17,8 @@ interface ElectronAPI {
   restoreSession: () => Promise<SessionData>
   showMessageBox: (options: Electron.MessageBoxOptions) => Promise<number>
   getAppVersion: () => Promise<string>
-  showItemInFolder: (filePath: string) => void
+  showItemInFolder: (filePath: string) => Promise<{success: boolean; error?: string}>
+  renameFile: (oldPath: string, newName: string) => Promise<{success: boolean; newPath?: string; error?: string}>
   minimizeWindow: () => void
   maximizeWindow: () => void
   closeWindow: () => void

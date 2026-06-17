@@ -5,8 +5,9 @@ interface SidebarCallbacks {
   onOpenFile: () => void
   onOpenFolder: () => void
   onCloseFile: (id: string) => void
-  onCloseFolder: (id: string) => void
+  onRemoveFolder: (id: string) => void
   onShowInFolder: (filePath: string) => void
+  onRenameItem: (id: string, newName: string) => Promise<boolean>
 }
 
 export class Sidebar {
@@ -117,6 +118,7 @@ export class Sidebar {
         const item = this.findFileItem(id)
         if (!item) return
         this.showContextMenu(ev as MouseEvent, [
+          { label: 'Rename', action: () => this.startRename(id) },
           { label: 'Show in File Explorer', action: () => this.callbacks.onShowInFolder(item.url) },
           { label: 'Close File', action: () => this.callbacks.onCloseFile(id) },
         ])
@@ -136,8 +138,9 @@ export class Sidebar {
         const item = this.findFileItem(id)
         if (!item) return
         this.showContextMenu(ev as MouseEvent, [
+          { label: 'Rename', action: () => this.startRename(id) },
           { label: 'Show in File Explorer', action: () => this.callbacks.onShowInFolder(item.url) },
-          { label: 'Close Folder', action: () => this.callbacks.onCloseFolder(id) },
+          { label: 'Remove Folder', action: () => this.callbacks.onRemoveFolder(id) },
         ])
       })
     })
@@ -181,6 +184,50 @@ export class Sidebar {
       this.collapsedFolders.add(path)
     }
     this.render(this.openFiles, this.rootFolders, document.querySelector('.file-item.selected')?.getAttribute('data-id') ?? null)
+  }
+
+  private startRename(id: string): void {
+    const el = this.container.querySelector(`[data-id="${id}"]`)
+    if (!el) return
+    const nameSpan = el.querySelector('.file-name, .folder-name') as HTMLElement
+    if (!nameSpan) return
+
+    const oldName = nameSpan.textContent || ''
+    this.hideContextMenu()
+
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.value = oldName
+    input.className = 'rename-input'
+    input.style.width = Math.max(60, oldName.length * 8) + 'px'
+
+    nameSpan.replaceWith(input)
+    input.focus()
+    input.select()
+
+    const finishRename = async () => {
+      const newName = input.value.trim()
+      if (newName && newName !== oldName) {
+        await this.callbacks.onRenameItem(id, newName)
+      }
+      const newSpan = document.createElement('span')
+      newSpan.className = nameSpan.matches('.folder-name') ? 'folder-name' : 'file-name'
+      newSpan.textContent = newName || oldName
+      input.replaceWith(newSpan)
+    }
+
+    const cancelRename = () => {
+      const newSpan = document.createElement('span')
+      newSpan.className = nameSpan.matches('.folder-name') ? 'folder-name' : 'file-name'
+      newSpan.textContent = oldName
+      input.replaceWith(newSpan)
+    }
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finishRename() }
+      if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
+    })
+    input.addEventListener('blur', () => finishRename())
   }
 
   private fileIcon(): string {

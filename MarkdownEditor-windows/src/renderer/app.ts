@@ -44,12 +44,17 @@ class App {
         this.state.closeFile(id)
         this.syncUI()
       },
-      onCloseFolder: (id) => {
-        this.state.closeFolder(id)
+      onRemoveFolder: (id) => {
+        this.state.removeFolder(id)
         this.syncUI()
       },
       onShowInFolder: (filePath) => {
         window.electronAPI.showItemInFolder(filePath)
+      },
+      onRenameItem: async (id, newName) => {
+        const ok = await this.state.renameItem(id, newName)
+        if (ok) this.syncUI()
+        return ok
       },
     })
 
@@ -104,10 +109,12 @@ class App {
       })
     })
     menuHandler('menu:fontLarger', () => {
+      this.state.pushFontSizeUndo(this.state.fontSize)
       this.state.fontSize = Math.min(72, this.state.fontSize + 1)
       this.editor.setFontSize(this.state.fontSize)
     })
     menuHandler('menu:fontSmaller', () => {
+      this.state.pushFontSizeUndo(this.state.fontSize)
       this.state.fontSize = Math.max(9, this.state.fontSize - 1)
       this.editor.setFontSize(this.state.fontSize)
     })
@@ -217,12 +224,47 @@ class App {
   private searchState = { active: false, query: '', index: 0, count: 0 }
 
   private setupSearch(): void {
+    const panel = document.createElement('div')
+    panel.id = 'search-bar'
+    panel.className = 'search-floating-panel'
+    panel.style.display = 'none'
+    panel.innerHTML = `
+      <input type="text" id="search-input" placeholder="Search..." spellcheck="false">
+      <input type="text" id="replace-input" placeholder="Replace..." spellcheck="false">
+      <span id="search-count" class="search-count"></span>
+      <button id="search-prev" class="search-nav-btn" title="Previous (Shift+Enter)"></button>
+      <button id="search-next" class="search-nav-btn" title="Next (Enter)"></button>
+      <button id="replace-btn" class="replace-btn" title="Replace">Replace</button>
+      <button id="replace-all-btn" class="replace-btn" title="Replace All">All</button>
+      <button id="search-close" class="search-close-btn" title="Close (Escape)"></button>
+    this.makeDraggable(panel)
+    `
+
+
     document.addEventListener('keydown', (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'w') {
         e.preventDefault()
         e.stopPropagation()
         this.state.closeCurrentFile()
         return
+      }
+      if (!this.searchState.active && (e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+        const newSize = this.state.undoFontSize()
+        if (newSize !== null) {
+          e.preventDefault()
+          this.state.fontSize = newSize
+          this.editor.setFontSize(newSize)
+          return
+        }
+      }
+      if (!this.searchState.active && (e.metaKey || e.ctrlKey) && e.key === 'z' && e.shiftKey) {
+        const newSize = this.state.redoFontSize()
+        if (newSize !== null) {
+          e.preventDefault()
+          this.state.fontSize = newSize
+          this.editor.setFontSize(newSize)
+          return
+        }
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         e.preventDefault()
@@ -272,6 +314,8 @@ class App {
     document.getElementById('search-next')?.addEventListener('click', () => this.searchNext())
     document.getElementById('search-prev')?.addEventListener('click', () => this.searchPrev())
     document.getElementById('search-close')?.addEventListener('click', () => this.closeSearch())
+    document.getElementById('replace-btn')?.addEventListener('click', () => this.replaceCurrent())
+    document.getElementById('replace-all-btn')?.addEventListener('click', () => this.replaceAll())
   }
 
   private toggleSearch(): void {
@@ -282,6 +326,9 @@ class App {
     } else {
       this.searchState.active = true
       bar.style.display = ''
+      bar.style.top = '60px'
+      bar.style.left = '50%'
+      bar.style.transform = 'translateX(-50%)'
       const input = document.getElementById('search-input') as HTMLInputElement
       if (input) {
         input.value = ''
@@ -347,13 +394,35 @@ class App {
     const el = document.getElementById('search-count')
     if (!el) return
     if (this.searchState.count > 0) {
-      el.textContent = `${this.searchState.index + 1} / ${this.searchState.count}`
+      el.textContent = (this.searchState.index + 1) + ' / ' + this.searchState.count
     } else {
       el.textContent = ''
     }
   }
 
-  private syncUI(): void {
+  private replaceCurrent(): void {
+    if (!this.searchState.query || this.searchState.count === 0) return
+    const replaceInput = document.getElementById('replace-input') as HTMLInputElement
+    if (!replaceInput) return
+    const replacement = replaceInput.value
+    const replaced = this.editor.replace(this.searchState.query, replacement)
+    if (replaced > 0) {
+      this.state.updateContent(this.editor.getContent())
+      this.doSearch(this.searchState.query)
+    }
+  }
+
+  private replaceAll(): void {
+    if (!this.searchState.query || this.searchState.count === 0) return
+    const replaceInput = document.getElementById('replace-input') as HTMLInputElement
+    if (!replaceInput) return
+    const replacement = replaceInput.value
+    const replaced = this.editor.replace(this.searchState.query, replacement)
+    if (replaced > 0) {
+      this.state.updateContent(this.editor.getContent())
+      this.doSearch(this.searchState.query)
+    }
+  }private syncUI(): void {
     this.sidebar.render(
       this.state.openFiles,
       this.state.rootFolders,
@@ -361,13 +430,15 @@ class App {
     )
 
     if (this.state.selectedFileID && this.state.currentFilePath) {
-      this.editor.setContent(this.state.currentFileContent)
+      if (this.editor.getContent() !== this.state.currentFileContent) {
+        this.editor.setContent(this.state.currentFileContent)
+      }
       this.editor.setLanguage(this.state.isHtmlFile)
       this.editor.setFontSize(this.state.fontSize)
       this.editor.setTheme(this.theme.isDark())
 
       const fileName = this.state.currentFilePath.split(/[/\\]/).pop() || ''
-      const dirty = this.state.isFileDirty ? ' — Edited' : ''
+      const dirty = this.state.isFileDirty ? '  Edited' : ''
       const titlebarText = document.getElementById('titlebar-text')
       if (titlebarText) titlebarText.textContent = fileName + dirty
 
@@ -380,8 +451,10 @@ class App {
       const noFileOverlay = document.getElementById('no-file-overlay')
       if (noFileOverlay) noFileOverlay.classList.remove('hidden')
 
-      this.editor.setContent('')
-      this.preview.clear()
+      if (this.editor.getContent() !== '') {
+        this.editor.setContent('')
+        this.preview.clear()
+      }
     }
 
     const editorPane = document.getElementById('editor-pane')
@@ -412,6 +485,12 @@ class App {
     const contentWidthBtn = document.getElementById('btn-content-width')
     if (contentWidthBtn) {
       contentWidthBtn.style.display = this.state.previewOnly ? '' : 'none'
+      const svgs = [
+        '<svg width="16" height="16" viewBox="0 0 18 18" fill="none"><rect x="4" y="3" width="10" height="12" rx="1.5" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2 2"/></svg>',
+        '<svg width="16" height="16" viewBox="0 0 18 18" fill="none"><rect x="2.5" y="3" width="13" height="12" rx="1.5" stroke="currentColor" stroke-width="1.3"/></svg>',
+        '<svg width="16" height="16" viewBox="0 0 18 18" fill="none"><rect x="1" y="3" width="16" height="12" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M1 6h16" stroke="currentColor" stroke-width="0.8" opacity="0.3"/></svg>'
+      ]
+      contentWidthBtn.innerHTML = svgs[this.state.previewContentWidth]
       const labels = ['720px', '960px', 'Full Width']
       contentWidthBtn.title = 'Content Width: ' + labels[this.state.previewContentWidth]
     }
@@ -482,7 +561,7 @@ class App {
         }
       }
     } catch {
-      // No session to restore — start fresh
+      // No session to restore  start fresh
     }
   }
 }

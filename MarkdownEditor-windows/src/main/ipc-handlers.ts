@@ -75,6 +75,25 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('file:rename', async (_event, oldPath: string, newName: string) => {
+    try {
+      const dir = path.dirname(oldPath)
+      const newPath = path.join(dir, newName)
+      if (!newName || newName.includes('/') || newName.includes('\\')) {
+        return { success: false, error: 'Invalid file name' }
+      }
+      try {
+        await fs.access(newPath)
+        return { success: false, error: 'A file or folder with that name already exists' }
+      } catch { }
+      await fs.rename(oldPath, newPath)
+      return { success: true, newPath }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { success: false, error: message }
+    }
+  })
+
   ipcMain.handle('file:scanDirectory', async (_event, dirPath: string) => {
     try {
       const tree = await scanDirectorySafe(dirPath)
@@ -138,8 +157,14 @@ export function registerIpcHandlers(): void {
     BrowserWindow.fromWebContents(event.sender)?.close()
   })
 
-  ipcMain.handle('file:showInFolder', (_event, filePath: string) => {
-    shell.showItemInFolder(filePath)
+  ipcMain.handle('file:showInFolder', async (_event, filePath: string) => {
+    try {
+      shell.showItemInFolder(filePath)
+      return { success: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { success: false, error: message }
+    }
   })
 }
 

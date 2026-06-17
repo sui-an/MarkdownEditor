@@ -18,9 +18,42 @@ export class WindowState {
   isLoadingFile = false
   isHtmlFile = false
 
+  private fontSizeHistory: number[] = []
+  private fontSizeRedoStack: number[] = []
+
+  pushFontSizeUndo(oldSize: number): void {
+    this.fontSizeHistory.push(oldSize)
+    this.fontSizeRedoStack = []
+  }
+
+  undoFontSize(): number | null {
+    if (this.fontSizeHistory.length === 0) return null
+    const previousSize = this.fontSizeHistory.pop()!
+    this.fontSizeRedoStack.push(this.fontSize)
+    return previousSize
+  }
+
+  redoFontSize(): number | null {
+    if (this.fontSizeRedoStack.length === 0) return null
+    const nextSize = this.fontSizeRedoStack.pop()!
+    this.fontSizeHistory.push(this.fontSize)
+    return nextSize
+  }
+
   private folderWatcherIDs: Map<string, string> = new Map()
+  private static readonly MAX_CACHE_SIZE = 50
   private fileContentCache: Map<string, string> = new Map()
   private onStateChange?: () => void
+
+  private setCacheEntry(key: string, value: string): void {
+    if (this.fileContentCache.size >= WindowState.MAX_CACHE_SIZE) {
+      const firstKey = this.fileContentCache.keys().next().value
+      if (firstKey !== undefined) {
+        this.fileContentCache.delete(firstKey)
+      }
+    }
+    this.fileContentCache.set(key, value)
+  }
 
   setOnChange(callback: () => void): void {
     this.onStateChange = callback
@@ -68,7 +101,7 @@ export class WindowState {
     }
 
     this.openFiles.push(item)
-    this.fileContentCache.set(filePath, result.content!)
+    this.setCacheEntry(filePath, result.content!)
     this.selectedFileID = item.id
     this.currentFilePath = filePath
     this.currentFileContent = result.content!
@@ -125,7 +158,7 @@ export class WindowState {
       return
     }
     this.isFileDirty = false
-    this.fileContentCache.set(this.currentFilePath, this.currentFileContent)
+    this.setCacheEntry(this.currentFilePath, this.currentFileContent)
     this.notifyChange()
   }
 
@@ -157,7 +190,7 @@ export class WindowState {
     }
   }
 
-  closeFolder(id: string): void {
+  removeFolder(id: string): void {
     const idx = this.rootFolders.findIndex(f => f.id === id)
     if (idx === -1) return
     const watcherID = this.folderWatcherIDs.get(id)
@@ -173,6 +206,40 @@ export class WindowState {
       this.isFileDirty = false
     }
     this.notifyChange()
+  }
+
+  async renameItem(id: string, newName: string): Promise<boolean> {
+    const item = this.findItem(id)
+    if (!item) return false
+
+    const result = await window.electronAPI.renameFile(item.url, newName)
+    if (!result.success) {
+      await window.electronAPI.showMessageBox({
+        type: 'warning',
+        title: 'Rename Failed',
+        message: result.error || 'Unknown error',
+      })
+      return false
+    }
+
+    const oldUrl = item.url
+    const newUrl = result.newPath!
+
+    if (this.fileContentCache.has(oldUrl)) {
+      const content = this.fileContentCache.get(oldUrl)!
+      this.setCacheEntry(newUrl, content)
+      this.fileContentCache.delete(oldUrl)
+    }
+
+    item.url = newUrl
+    item.name = newName
+
+    if (this.currentFilePath === oldUrl) {
+      this.currentFilePath = newUrl
+    }
+
+    this.notifyChange()
+    return true
   }
 
   selectFile(id: string): void {
@@ -198,7 +265,7 @@ export class WindowState {
     const result = await window.electronAPI.readFile(filePath)
     if (result.success && result.content !== undefined) {
       this.currentFileContent = result.content
-      this.fileContentCache.set(filePath, result.content)
+      this.setCacheEntry(filePath, result.content)
       this.isHtmlFile = filePath.endsWith('.html') || filePath.endsWith('.htm')
       this.outlineHeadings = this.parseHeadings(result.content)
       this.isFileDirty = false
@@ -211,9 +278,17 @@ export class WindowState {
     this.currentFileContent = content
     this.isFileDirty = true
     if (this.currentFilePath) {
-      this.fileContentCache.set(this.currentFilePath, content)
+      this.setCacheEntry(this.currentFilePath, content)
     }
-    this.outlineHeadings = this.parseHeadings(content)
+    // Throttle heading parsing for long documents — only parse on explicit refresh
+    if (content.length <= 5000) {
+      this.outlineHeadings = this.parseHeadings(content)
+    }
+    this.notifyChange()
+  }
+
+  refreshHeadings(): void {
+    this.outlineHeadings = this.parseHeadings(this.currentFileContent)
     this.notifyChange()
   }
 
@@ -321,7 +396,7 @@ export class WindowState {
       const result = await window.electronAPI.readFile(filePath)
       if (result.success && result.content !== undefined) {
         this.currentFileContent = result.content
-        this.fileContentCache.set(filePath, result.content)
+        this.setCacheEntry(filePath, result.content)
         this.isFileDirty = false
         this.notifyChange()
       }
