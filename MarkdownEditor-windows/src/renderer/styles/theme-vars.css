@@ -1,4 +1,6 @@
 :root {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f2f2f7;
   --sidebar-bg: #f2f2f7;
   --editor-bg: #ffffff;
   --preview-bg: #ffffff;
@@ -18,6 +20,8 @@
 }
 
 :root.dark {
+  --bg-primary: #2c2c2e;
+  --bg-secondary: #1c1c1e;
   --sidebar-bg: #1c1c1e;
   --editor-bg: #1c1c21;
   --preview-bg: #1c1c21;

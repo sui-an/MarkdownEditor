@@ -49,6 +49,17 @@ export function buildMenu(createWindow?: () => Electron.BrowserWindow): void {
         { role: 'copy' },
         { role: 'paste' },
         { role: 'selectAll' },
+        { type: 'separator' },
+        {
+          label: 'Find',
+          accelerator: 'CmdOrCtrl+F',
+          click: () => getFocusedWindow()?.webContents.send('menu:find'),
+        },
+        {
+          label: 'Find and Replace',
+          accelerator: 'CmdOrCtrl+H',
+          click: () => getFocusedWindow()?.webContents.send('menu:findReplace'),
+        },
       ],
     },
     {

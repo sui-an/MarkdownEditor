@@ -265,7 +265,26 @@ export class Editor {
     this.view.dispatch({ effects: setSearchDecos.of(Decoration.none) })
   }
 
-  replace(query: string, replacement: string): number {
+  replaceAt(index: number, query: string, replacement: string): boolean {
+    if (!query) return false
+    const lowerQ = query.toLowerCase()
+    const fullText = this.view.state.doc.sliceString(0).toLowerCase()
+    let pos = 0, matchIdx = 0
+    while ((pos = fullText.indexOf(lowerQ, pos)) !== -1) {
+      if (matchIdx === index) {
+        this.view.dispatch({
+          changes: { from: pos, to: pos + query.length, insert: replacement },
+          annotations: Transaction.addToHistory.of(false),
+        })
+        return true
+      }
+      pos = pos + query.length
+      matchIdx++
+    }
+    return false
+  }
+
+  replaceAll(query: string, replacement: string): number {
     if (!query) return 0
     const lowerQ = query.toLowerCase()
     const fullText = this.view.state.doc.sliceString(0)

@@ -6,6 +6,7 @@ const menuEvents = [
   'menu:newNote', 'menu:openFile', 'menu:openFolder', 'menu:save',
   'menu:togglePreviewOnly', 'menu:toggleSidebar', 'menu:toggleOutline',
   'menu:fontLarger', 'menu:fontSmaller', 'menu:theme',
+  'menu:find', 'menu:findReplace',
 ]
 for (const event of menuEvents) {
   ipcRenderer.on(event, (_event, ...args) => {

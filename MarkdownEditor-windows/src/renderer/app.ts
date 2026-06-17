@@ -118,6 +118,12 @@ class App {
       this.state.fontSize = Math.max(9, this.state.fontSize - 1)
       this.editor.setFontSize(this.state.fontSize)
     })
+    menuHandler('menu:find', () => this.toggleSearch())
+    menuHandler('menu:findReplace', () => {
+      this.toggleSearch()
+      const replaceInput = document.getElementById('replace-input') as HTMLInputElement
+      if (replaceInput) replaceInput.focus()
+    })
 
     window.addEventListener('menu:theme', ((e: CustomEvent) => {
       this.theme.setMode(e.detail)
@@ -232,13 +238,21 @@ class App {
       <input type="text" id="search-input" placeholder="Search..." spellcheck="false">
       <input type="text" id="replace-input" placeholder="Replace..." spellcheck="false">
       <span id="search-count" class="search-count"></span>
-      <button id="search-prev" class="search-nav-btn" title="Previous (Shift+Enter)"></button>
-      <button id="search-next" class="search-nav-btn" title="Next (Enter)"></button>
+      <button id="search-prev" class="search-nav-btn" title="Previous (Shift+Enter)">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M9 8L6 5 3 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button id="search-next" class="search-nav-btn" title="Next (Enter)">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <button id="replace-btn" class="replace-btn" title="Replace">Replace</button>
       <button id="replace-all-btn" class="replace-btn" title="Replace All">All</button>
-      <button id="search-close" class="search-close-btn" title="Close (Escape)"></button>
-    this.makeDraggable(panel)
+      <button id="search-close" class="search-close-btn" title="Close (Escape)">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
     `
+
+    this.makeDraggable(panel)
+    document.body.appendChild(panel)
 
 
     document.addEventListener('keydown', (e) => {
@@ -269,6 +283,13 @@ class App {
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         e.preventDefault()
         this.toggleSearch()
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'h') {
+        e.preventDefault()
+        this.toggleSearch()
+        const replaceInput = document.getElementById('replace-input') as HTMLInputElement
+        if (replaceInput) replaceInput.focus()
         return
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'g') {
@@ -405,8 +426,8 @@ class App {
     const replaceInput = document.getElementById('replace-input') as HTMLInputElement
     if (!replaceInput) return
     const replacement = replaceInput.value
-    const replaced = this.editor.replace(this.searchState.query, replacement)
-    if (replaced > 0) {
+    const replaced = this.editor.replaceAt(this.searchState.index, this.searchState.query, replacement)
+    if (replaced) {
       this.state.updateContent(this.editor.getContent())
       this.doSearch(this.searchState.query)
     }
@@ -417,12 +438,38 @@ class App {
     const replaceInput = document.getElementById('replace-input') as HTMLInputElement
     if (!replaceInput) return
     const replacement = replaceInput.value
-    const replaced = this.editor.replace(this.searchState.query, replacement)
+    const replaced = this.editor.replaceAll(this.searchState.query, replacement)
     if (replaced > 0) {
       this.state.updateContent(this.editor.getContent())
       this.doSearch(this.searchState.query)
     }
-  }private syncUI(): void {
+  }
+
+  private makeDraggable(el: HTMLElement): void {
+    let isDragging = false, startX = 0, startY = 0, origLeft = 0, origTop = 0
+    el.addEventListener('pointerdown', (e) => {
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'BUTTON' || (e.target as HTMLElement).closest('button')) return
+      isDragging = true
+      startX = e.clientX
+      startY = e.clientY
+      const rect = el.getBoundingClientRect()
+      origLeft = rect.left
+      origTop = rect.top
+      el.style.transform = 'none'
+      el.style.left = origLeft + 'px'
+      el.style.top = origTop + 'px'
+      el.setPointerCapture(e.pointerId)
+    })
+    el.addEventListener('pointermove', (e) => {
+      if (!isDragging) return
+      el.style.left = (origLeft + e.clientX - startX) + 'px'
+      el.style.top = (origTop + e.clientY - startY) + 'px'
+    })
+    el.addEventListener('pointerup', () => { isDragging = false })
+  }
+
+  private syncUI(): void {
     this.sidebar.render(
       this.state.openFiles,
       this.state.rootFolders,
