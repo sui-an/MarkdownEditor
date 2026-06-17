@@ -144,6 +144,19 @@ export class WindowState {
     this.notifyChange()
   }
 
+  closeCurrentFile(): void {
+    if (!this.selectedFileID) return
+    if (this.openFiles.some(f => f.id === this.selectedFileID)) {
+      this.closeFile(this.selectedFileID)
+    } else {
+      this.selectedFileID = null
+      this.currentFilePath = null
+      this.currentFileContent = ''
+      this.isFileDirty = false
+      this.notifyChange()
+    }
+  }
+
   closeFolder(id: string): void {
     const idx = this.rootFolders.findIndex(f => f.id === id)
     if (idx === -1) return

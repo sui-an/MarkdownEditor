@@ -216,7 +216,7 @@ export class Sidebar {
           <div class="folder-header" data-id="${item.id}" data-path="${item.url}">
             ${this.folderIcon()}
             <span class="folder-name">${this.escapeHtml(item.name)}</span>
-            <span class="collapse-chevron">${isCollapsed ? '▶' : '▼'}</span>
+            <span class="collapse-chevron"><svg class="chevron-icon${isCollapsed ? '' : ' rotated'}" viewBox="0 0 10 10" width="10" height="10"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
           </div>
           ${isCollapsed ? '' : children.map(c => this.renderTreeItem(c, selectedID, depth + 1)).join('')}
         </div>
@@ -234,7 +234,7 @@ export class Sidebar {
           <div class="subfolder-header" data-id="${item.id}" data-path="${item.url}">
             ${this.folderIcon()}
             <span class="folder-name">${this.escapeHtml(item.name)}</span>
-            <span class="collapse-chevron">${isCollapsed ? '▶' : '▼'}</span>
+            <span class="collapse-chevron"><svg class="chevron-icon${isCollapsed ? '' : ' rotated'}" viewBox="0 0 10 10" width="10" height="10"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
           </div>
           ${isCollapsed ? '' : children.map(c => this.renderTreeItem(c, selectedID, depth + 1)).join('')}
         </div>

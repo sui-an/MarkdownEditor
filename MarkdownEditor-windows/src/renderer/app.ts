@@ -218,6 +218,12 @@ class App {
 
   private setupSearch(): void {
     document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'w') {
+        e.preventDefault()
+        e.stopPropagation()
+        this.state.closeCurrentFile()
+        return
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         e.preventDefault()
         this.toggleSearch()
