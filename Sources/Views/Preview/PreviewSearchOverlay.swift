@@ -12,6 +12,7 @@ struct SearchOverlay: View {
     var commandId: Int
     var onClose: (() -> Void)?
 
+    // MARK: Search state
     @State private var query = ""
     @State private var replacement = ""
     @State private var currentMatchIndex = 0
@@ -19,158 +20,173 @@ struct SearchOverlay: View {
     @State private var searchDebounceWork: DispatchWorkItem?
     @State private var isReplaceExpanded = false
 
+    // MARK: Drag state
+    @State private var isDragging = false
+    @State private var dragOffset = CGSize.zero
+    @State private var dragStartLocation = CGPoint.zero
+    @State private var dragOffsetOnMouseDown = CGSize.zero
+    @State private var eventMonitor: Any?
+
     private var isEditMode: Bool { textView != nil }
+
+    // MARK: - Body
 
     var body: some View {
         VStack(spacing: 6) {
-            // Search pill — all controls inside
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(.secondary)
-
-                NativeSearchField(
-                    text: $query,
-                    placeholder: isEditMode ? "Search" : "Search preview",
-                    commandId: commandId,
-                    onSubmit: {
-                        searchDebounceWork?.cancel()
-                        totalMatches == 0 ? performSearch() : findNext()
-                    },
-                    onChange: { newValue in
-                        searchDebounceWork?.cancel()
-                        if newValue.isEmpty { performSearch(); return }
-                        let work = DispatchWorkItem { [performSearch] in performSearch() }
-                        searchDebounceWork = work
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
-                    }
-                )
-                .frame(height: 18)
-
-                if !query.isEmpty {
-                    Text(matchLabel)
-                        .font(.system(size: 11, weight: .regular, design: .monospaced))
-                        .foregroundStyle(.secondary)
-
-                    ZStack {
-                        Button { findPrevious() } label: {
-                            Image(systemName: "chevron.up")
-                                .font(.system(size: 10, weight: .medium))
-                                .frame(width: 20, height: 18)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(totalMatches == 0)
-                    }
-                    .contentShape(Rectangle())
-                    .onHover { hovering in if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
-
-                    ZStack {
-                        Button { findNext() } label: {
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 10, weight: .medium))
-                                .frame(width: 20, height: 18)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(totalMatches == 0)
-                    }
-                    .contentShape(Rectangle())
-                    .onHover { hovering in if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
-
-                    ZStack {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.12)) { isReplaceExpanded.toggle() }
-                        } label: {
-                            Image(systemName: isReplaceExpanded ? "chevron.up" : "chevron.down")
-                                .font(.system(size: 8, weight: .medium))
-                                .frame(width: 20, height: 18)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help(isReplaceExpanded ? "Hide Replace" : "Show Replace (⌘⌥F)")
-                    }
-                    .contentShape(Rectangle())
-                    .onHover { hovering in
-                        if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-                    }
-                }
-
-                ZStack {
-                    Button {
-                        if query.isEmpty { onClose?(); return }
-                        query = ""
-                        searchDebounceWork?.cancel()
-                        performSearch()
-                    } label: {
-                        Image(systemName: query.isEmpty ? "xmark" : "xmark.circle.fill")
-                            .font(.system(size: query.isEmpty ? 11 : 13))
-                            .frame(width: 20, height: 18)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                }
-                .contentShape(Rectangle())
-                .onHover { hovering in if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(Color(nsColor: .windowBackgroundColor))
-                    .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 22)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-            )
-
-            // Replace pill (when expanded)
-            if isReplaceExpanded {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.right.circle")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(.secondary)
-
-                    TextField("Replacement", text: $replacement)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 15))
-
-                    Button("Replace") { replaceCurrent() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(totalMatches == 0 || replacement.isEmpty)
-
-                    Button("All") { replaceAll() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(totalMatches == 0 || replacement.isEmpty)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 22)
-                        .fill(Color(nsColor: .windowBackgroundColor))
-                        .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22)
-                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-                )
-            }
+            searchPill
+            if isReplaceExpanded { replacePill }
         }
         .frame(width: 420)
         .padding(.horizontal, 16)
         .padding(.top, 8)
-        .contentShape(Rectangle())
+        .offset(dragOffset)
         .onAppear {
             isReplaceExpanded = replaceExpanded
+            dragOffset = .zero
+            startDragMonitor()
         }
+        .onDisappear { stopDragMonitor() }
         .onChange(of: replaceExpanded) { _, newValue in
             isReplaceExpanded = newValue
         }
         .onExitCommand { close() }
+    }
+
+    // MARK: - Pill Views
+
+    private var searchPill: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .pillIconStyle()
+
+            NativeSearchField(
+                text: $query,
+                placeholder: isEditMode ? "Search" : "Search preview",
+                commandId: commandId,
+                onSubmit: {
+                    searchDebounceWork?.cancel()
+                    totalMatches == 0 ? performSearch() : findNext()
+                },
+                onChange: { newValue in
+                    searchDebounceWork?.cancel()
+                    if newValue.isEmpty { performSearch(); return }
+                    let work = DispatchWorkItem { [performSearch] in performSearch() }
+                    searchDebounceWork = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+                }
+            )
+            .frame(height: 18)
+
+            if !query.isEmpty { matchControls }
+
+            PillCloseButton(query: $query, isEmpty: query.isEmpty, onClose: onClose, onSearch: performSearch)
+        }
+        .pillBackground()
+    }
+
+    private var matchControls: some View {
+        Group {
+            Text(matchLabel)
+                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            PillIconButton(
+                systemName: "chevron.up",
+                size: 10,
+                help: nil,
+                disabled: totalMatches == 0,
+                action: findPrevious
+            )
+
+            PillIconButton(
+                systemName: "chevron.down",
+                size: 10,
+                help: nil,
+                disabled: totalMatches == 0,
+                action: findNext
+            )
+
+            PillIconButton(
+                systemName: isReplaceExpanded ? "chevron.up" : "chevron.down",
+                size: 8,
+                help: isReplaceExpanded ? "Hide Replace" : "Show Replace (⌘⌥F)",
+                disabled: false,
+                action: { withAnimation(.easeInOut(duration: 0.12)) { isReplaceExpanded.toggle() } }
+            )
+        }
+    }
+
+    private var replacePill: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.right.circle")
+                .pillIconStyle()
+
+            TextField("Replacement", text: $replacement)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+
+            Button("Replace") { replaceCurrent() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(totalMatches == 0 || replacement.isEmpty)
+
+            Button("All") { replaceAll() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(totalMatches == 0 || replacement.isEmpty)
+        }
+        .pillBackground()
+    }
+
+    // MARK: - Drag handling
+
+    private func startDragMonitor() {
+        stopDragMonitor()
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [self] event in
+            self.handleDragEvent(event)
+            return event
+        }
+    }
+
+    private func stopDragMonitor() {
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+    }
+
+    private func handleDragEvent(_ event: NSEvent) {
+        guard let contentView = NSApp.keyWindow?.contentView else { return }
+        let location = event.locationInWindow
+        let hitView = contentView.hitTest(location)
+
+        switch event.type {
+        case .leftMouseDown:
+            if let hitView, isInteractiveView(hitView) { return }
+            isDragging = true
+            dragStartLocation = location
+            dragOffsetOnMouseDown = dragOffset
+        case .leftMouseDragged:
+            guard isDragging else { return }
+            dragOffset = CGSize(
+                width: dragOffsetOnMouseDown.width + location.x - dragStartLocation.x,
+                height: dragOffsetOnMouseDown.height - (location.y - dragStartLocation.y)
+            )
+        case .leftMouseUp:
+            isDragging = false
+        default: break
+        }
+    }
+
+    private func isInteractiveView(_ view: NSView) -> Bool {
+        if view is NSButton || view is NSTextField || view is NSSecureTextField { return true }
+        var current = view.superview
+        for _ in 0..<6 {
+            guard let v = current else { break }
+            if v is NSButton || v is NSTextField || v is NSSecureTextField { return true }
+            current = v.superview
+        }
+        return false
     }
 
     // MARK: - Helpers
@@ -193,7 +209,7 @@ struct SearchOverlay: View {
     }
 
     private func performSearch() {
-        isEditMode ? performEditorSearch() : nil
+        if isEditMode { performEditorSearch() }
         performPreviewSearch()
     }
 
@@ -217,7 +233,6 @@ struct SearchOverlay: View {
         guard let tv = textView?() else { return }
         clearEditorHighlights()
         guard !query.isEmpty else { totalMatches = 0; currentMatchIndex = 0; return }
-
         let ranges = findEditorMatches(in: tv.string)
         totalMatches = ranges.count
         currentMatchIndex = 0
@@ -273,27 +288,22 @@ struct SearchOverlay: View {
     // MARK: - Editor Replace
 
     private func replaceCurrent() {
-        guard let tv = textView?(), let storage = tv.textStorage, !query.isEmpty else { return }
+        guard let tv = textView?(), !query.isEmpty else { return }
         let ranges = findEditorMatches(in: tv.string)
         guard currentMatchIndex < ranges.count else { return }
-        storage.beginEditing()
-        storage.replaceCharacters(in: ranges[currentMatchIndex], with: replacement)
-        storage.endEditing()
+        tv.insertText(replacement as NSString, replacementRange: ranges[currentMatchIndex])
         performSearch()
     }
 
     private func replaceAll() {
-        guard let tv = textView?(), let storage = tv.textStorage, !query.isEmpty else { return }
+        guard let tv = textView?(), !query.isEmpty else { return }
         let ranges = findEditorMatches(in: tv.string)
         guard !ranges.isEmpty else { return }
-        storage.beginEditing()
-        var offset = 0
-        for range in ranges {
-            let adjusted = NSRange(location: range.location + offset, length: range.length)
-            storage.replaceCharacters(in: adjusted, with: replacement)
-            offset += (replacement as NSString).length - range.length
+        tv.undoManager?.beginUndoGrouping()
+        for range in ranges.reversed() {
+            tv.insertText(replacement as NSString, replacementRange: range)
         }
-        storage.endEditing()
+        tv.undoManager?.endUndoGrouping()
         performSearch()
     }
 
@@ -301,7 +311,11 @@ struct SearchOverlay: View {
 
     private func performPreviewSearch() {
         guard let wv = webView?() else { return }
-        guard !query.isEmpty else { wv.evaluateJavaScript(SearchJS.clearHighlights()); if !isEditMode { totalMatches = 0; currentMatchIndex = 0 }; return }
+        guard !query.isEmpty else {
+            wv.evaluateJavaScript(SearchJS.clearHighlights())
+            if !isEditMode { totalMatches = 0; currentMatchIndex = 0 }
+            return
+        }
         viewRefs?.lastSearchQuery = query
         wv.evaluateJavaScript(SearchJS.highlight(query: query, currentIndex: currentMatchIndex)) { result, error in
             guard error == nil, let jsonStr = result as? String,
@@ -324,9 +338,158 @@ struct SearchOverlay: View {
     }
 }
 
-// MARK: - Native NSTextField wrapper with reliable focus control
+// MARK: - Reusable Pill Components
 
-struct NativeSearchField: NSViewRepresentable {
+private extension View {
+    func pillBackground() -> some View {
+        self
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 22)
+                    .fill(Color(nsColor: .windowBackgroundColor))
+                    .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+            )
+            .overlay(CursorArrowView().allowsHitTesting(false))
+    }
+
+    func pillIconStyle() -> some View {
+        self
+            .font(.system(size: 14, weight: .regular))
+            .foregroundStyle(.secondary)
+    }
+}
+
+// MARK: - Pill Icon Button
+
+private struct PillIconButton: View {
+    let systemName: String
+    let size: CGFloat
+    let help: String?
+    let disabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        ZStack {
+            Button(action: action) {
+                Image(systemName: systemName)
+                    .font(.system(size: size, weight: .medium))
+                    .frame(width: 20, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled)
+        }
+        .contentShape(Rectangle())
+        .iflet(help) { view, text in view.help(text) }
+        .onHover { hovering in
+            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+    }
+}
+
+// MARK: - Pill Close Button
+
+private struct PillCloseButton: View {
+    @Binding var query: String
+    let isEmpty: Bool
+    let onClose: (() -> Void)?
+    let onSearch: () -> Void
+
+    var body: some View {
+        ZStack {
+            Button {
+                if isEmpty { onClose?(); return }
+                query = ""
+                onSearch()
+            } label: {
+                Image(systemName: isEmpty ? "xmark" : "xmark.circle.fill")
+                    .font(.system(size: isEmpty ? 11 : 13))
+                    .frame(width: 20, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+    }
+}
+
+// MARK: - Optional Help Modifier
+
+extension View {
+    @ViewBuilder
+    fileprivate func iflet<T>(_ value: T?, transform: (Self, T) -> some View) -> some View {
+        if let value {
+            transform(self, value)
+        } else {
+            self
+        }
+    }
+}
+
+// MARK: - Cursor-tracking overlay that forces arrow cursor
+
+private struct CursorArrowView: NSViewRepresentable {
+    func makeNSView(context: Context) -> CursorArrowNSView { CursorArrowNSView() }
+    func updateNSView(_ nsView: CursorArrowNSView, context: Context) {}
+}
+
+private class CursorArrowNSView: NSView {
+    private var cursorPushed = false
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas where area.options.contains(.cursorUpdate) {
+            removeTrackingArea(area)
+        }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.cursorUpdate, .activeInKeyWindow, .mouseEnteredAndExited],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        guard let contentView = window?.contentView else { return }
+        let hitView = contentView.hitTest(event.locationInWindow)
+        if let hitView, isInteractiveView(hitView) { return }
+        if !cursorPushed {
+            NSCursor.arrow.push()
+            cursorPushed = true
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if cursorPushed {
+            NSCursor.pop()
+            cursorPushed = false
+        }
+    }
+
+    private func isInteractiveView(_ view: NSView) -> Bool {
+        if view is NSTextField || view is NSButton { return true }
+        var current = view.superview
+        for _ in 0..<8 {
+            guard let v = current else { break }
+            if v is NSTextField || v is NSButton { return true }
+            current = v.superview
+        }
+        return false
+    }
+}
+
+// MARK: - Native NSTextField wrapper
+
+private struct NativeSearchField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let commandId: Int
@@ -346,14 +509,10 @@ struct NativeSearchField: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSTextField, context: Context) {
-        if nsView.stringValue != text {
-            nsView.stringValue = text
-        }
+        if nsView.stringValue != text { nsView.stringValue = text }
         if context.coordinator.lastCommandId != commandId {
             context.coordinator.lastCommandId = commandId
-            DispatchQueue.main.async {
-                nsView.window?.makeFirstResponder(nsView)
-            }
+            DispatchQueue.main.async { nsView.window?.makeFirstResponder(nsView) }
         }
     }
 
@@ -361,7 +520,7 @@ struct NativeSearchField: NSViewRepresentable {
         Coordinator(text: $text, onSubmit: onSubmit, onChange: onChange)
     }
 
-    class Coordinator: NSObject, NSTextFieldDelegate {
+    final class Coordinator: NSObject, NSTextFieldDelegate {
         @Binding var text: String
         let onSubmit: () -> Void
         let onChange: (String) -> Void
