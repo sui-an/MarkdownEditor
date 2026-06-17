@@ -32,7 +32,7 @@ final class ThemeManager {
 
     private init() {
         lastThemeMode = UserDefaults.standard.string(forKey: "themeMode") ?? "system"
-        isDark = computeIsDark(for: lastThemeMode)
+        isDark = Self.isDark(for: lastThemeMode)
 
         // Watch for system-level appearance changes while in "system" mode.
         systemObserver = DistributedNotificationCenter.default.addObserver(
@@ -44,7 +44,7 @@ final class ThemeManager {
             let mode = UserDefaults.standard.string(forKey: "themeMode") ?? "system"
             guard mode == "system" else { return }
             self.lastThemeMode = mode
-            self.isDark = self.computeIsDark(for: mode)
+            self.isDark = Self.isDark(for: mode)
             NotificationCenter.default.post(name: .themeDidChange, object: nil, userInfo: ["isDark": self.isDark])
         }
     }
@@ -62,7 +62,7 @@ final class ThemeManager {
     func applyCurrentTheme() {
         let mode = UserDefaults.standard.string(forKey: "themeMode") ?? "system"
         lastThemeMode = mode
-        isDark = computeIsDark(for: mode)
+        isDark = Self.isDark(for: mode)
 
         let appearance: NSAppearance?
         switch mode {
@@ -109,9 +109,4 @@ final class ThemeManager {
         }
     }
 
-    // MARK: - Private
-
-    private func computeIsDark(for mode: String) -> Bool {
-        Self.isDark(for: mode)
-    }
 }

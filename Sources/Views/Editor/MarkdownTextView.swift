@@ -470,9 +470,6 @@ struct MarkdownTextView: NSViewRepresentable {
         /// see this flag and defer textView.string = text instead of applying
         /// it synchronously.
         var pendingContentLoad = false
-        /// Monotonically increasing generation for file-switch text deferral.
-        /// Each file switch increments this; stale deferred blocks are skipped.
-        var fileSwitchGen: Int64 = 0
         /// Cached flag: does the current file contain `![` (inline image syntax)?
         /// Avoids O(n) string scan on every keystroke for files without images.
         var hasInlineImages = false
@@ -677,13 +674,16 @@ struct MarkdownTextView: NSViewRepresentable {
                 // Resize for display
                 let maxWidth: CGFloat = 400
                 let maxHeight: CGFloat = 300
+                let minDim: CGFloat = 20
                 var size = image.size
                 if size.width > maxWidth || size.height > maxHeight {
                     let scale = min(maxWidth / size.width, maxHeight / size.height)
                     size = NSSize(width: size.width * scale, height: size.height * scale)
                 }
-                if size.width < 20 { size.width = 20 }
-                if size.height < 20 { size.height = 20 }
+                if size.width < minDim || size.height < minDim {
+                    let scale = max(minDim / size.width, minDim / size.height)
+                    size = NSSize(width: size.width * scale, height: size.height * scale)
+                }
 
                 let displayImage = NSImage(size: size, flipped: false) { _ in
                     image.draw(in: NSRect(origin: .zero, size: size),

@@ -5,7 +5,11 @@ enum CodeTokenizer {
     // MARK: - Helpers
 
     private static func charAt(_ text: NSString, _ pos: Int) -> Character {
-        Character(UnicodeScalar(text.character(at: pos))!)
+        let ch = text.character(at: pos)
+        guard let scalar = UnicodeScalar(ch) else {
+            return Character(text.substring(with: NSRange(location: pos, length: 1)))
+        }
+        return Character(scalar)
     }
 
     enum TokenType {

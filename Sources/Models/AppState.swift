@@ -12,18 +12,6 @@ extension URL {
     }
 }
 
-// MARK: - NSAlert Helpers
-
-extension NSAlert {
-    static func showError(message: String, informative: String) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = informative
-        alert.alertStyle = .warning
-        alert.runModal()
-    }
-}
-
 // MARK: - HTML Cache Entry
 
 private final class CachedHTML {

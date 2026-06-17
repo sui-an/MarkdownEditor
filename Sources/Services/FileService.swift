@@ -73,11 +73,12 @@ enum FileService {
     }
 
     private static func sortChildren(of item: inout FileTreeItem) {
-        item.children?.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        guard let children = item.children else { return }
+        guard var children = item.children else { return }
+        children.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         for i in children.indices where children[i].isDirectory {
-            sortChildren(of: &item.children![i])
+            sortChildren(of: &children[i])
         }
+        item.children = children
     }
 
     private static func appendToTree(root: inout FileTreeItem, item: FileTreeItem, parentURL: URL) {

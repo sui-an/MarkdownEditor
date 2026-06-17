@@ -2,25 +2,6 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-private func visToInt(_ v: NavigationSplitViewVisibility) -> Int {
-    switch v {
-    case .detailOnly: return 3
-    case .doubleColumn: return 2
-    case .all: return 1
-    case .automatic: return 0
-    default: return 0
-    }
-}
-
-private func intToVis(_ i: Int) -> NavigationSplitViewVisibility {
-    switch i {
-    case 1: return .all
-    case 2: return .doubleColumn
-    case 3: return .detailOnly
-    default: return .automatic
-    }
-}
-
 struct ContentView: View {
     let appState: AppState
 
@@ -56,8 +37,22 @@ struct ContentView: View {
 
     private var columnVisibility: Binding<NavigationSplitViewVisibility> {
         Binding(
-            get: { intToVis(appState.sidebarVis) },
-            set: { appState.sidebarVis = visToInt($0) }
+            get: {
+                switch appState.sidebarVis {
+                case 1: return .all
+                case 2: return .doubleColumn
+                case 3: return .detailOnly
+                default: return .automatic
+                }
+            },
+            set: {
+                switch $0 {
+                case .all: appState.sidebarVis = 1
+                case .doubleColumn: appState.sidebarVis = 2
+                case .detailOnly: appState.sidebarVis = 3
+                default: appState.sidebarVis = 0
+                }
+            }
         )
     }
 

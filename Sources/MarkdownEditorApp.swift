@@ -112,10 +112,6 @@ final class FileOpenCoordinator {
     private var currentBatch = 0
     private let lock = NSLock()
 
-    /// Exposed for diagnostic logging only
-    var pendingCount: Int { pendingURLs.count }
-    var currentBatchValue: Int { currentBatch }
-
     func addFiles(_ urls: [URL]) -> Bool {
         lock.withLock {
             pendingURLs.append(contentsOf: urls)
