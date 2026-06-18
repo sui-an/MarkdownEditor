@@ -42,6 +42,10 @@ final class FileContentCache {
         contentHashes.removeValue(forKey: url)
     }
 
+    func updateHash(for url: URL, to newHash: String) {
+        contentHashes[url] = newHash
+    }
+
     func removeAll() {
         contents.removeAll()
         contentHashes.removeAll()

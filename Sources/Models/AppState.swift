@@ -105,6 +105,7 @@ final class AppState {
     @ObservationIgnored private var themeObserver: Any?
 
     private var folderWatchers: [String: FolderWatcher] = [:]
+    private var singleFileWatcher: FolderWatcher?
     private var selectedFileURL: URL?
     private var lastSavedContent: String = ""
     private var isRenaming = false
@@ -688,6 +689,10 @@ final class AppState {
         pendingOutlineWork?.cancel()
         pendingOutlineWork = nil
 
+        // Stop watching previous single file
+        singleFileWatcher?.stop()
+        singleFileWatcher = nil
+
         // Advance generation so stale async blocks discard results
         generation &+= 1
         let token = generation
@@ -705,6 +710,30 @@ final class AppState {
 
         selectedFileURL = url
         currentFileURL = url
+        
+        // If this file is not inside any watched root folder, watch it directly
+        let isInWatchedFolder = rootFolders.contains { folder in
+            url.path.hasPrefix(folder.url.path + "/")
+        }
+        if !isInWatchedFolder {
+            let watcher = FolderWatcher(paths: [url.path]) { [weak self] changedURLs in
+                guard let self = self else { return }
+                DispatchQueue.main.async {
+                    for changedURL in changedURLs {
+                        if changedURL == url, self.selectedFileURL == changedURL {
+                            if FileManager.default.fileExists(atPath: changedURL.path) {
+                                let cacheKey = FileContentCache.quickHash(url: changedURL)
+                                if self.fileCache.hash(for: changedURL) != cacheKey {
+                                    self.promptExternalChange(for: changedURL)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            watcher.start()
+            singleFileWatcher = watcher
+        }
 
         // Try cache FIRST — in-memory content cache (zero disk IO) then HTML cache.
         let cacheKey = FileContentCache.quickHash(url: url)
@@ -980,16 +1009,19 @@ final class AppState {
                 }
             }
 
-            if selectedFileURL == url {
-                if FileManager.default.fileExists(atPath: url.path) {
-                    let cacheKey = FileContentCache.quickHash(url: url)
-                    if fileCache.hash(for: url) != cacheKey {
-                        promptExternalChange(for: url)
-                    }
-                } else {
-                    clearSelection()
-                }
-            }
+             if selectedFileURL == url {
+                 if FileManager.default.fileExists(atPath: url.path) {
+                     let cacheKey = FileContentCache.quickHash(url: url)
+                     if fileCache.hash(for: url) != cacheKey {
+                         promptExternalChange(for: url)
+                     } else {
+                         // Debug: Always log when hash matches but we get here
+                         print("DEBUG: external change but hash matches, skipping prompt. cached: \(fileCache.hash(for: url) ?? "nil"), current: \(cacheKey)")
+                     }
+                 } else {
+                     clearSelection()
+                 }
+             }
         }
         if didChange { rebuildFileIndex() }
     }
@@ -1095,7 +1127,14 @@ final class AppState {
         }
     }
 
+    private var isShowingExternalChangePrompt = false
+
     func promptExternalChange(for url: URL) {
+        guard !isShowingExternalChangePrompt else {
+            return
+        }
+        isShowingExternalChangePrompt = true
+
         let alert = NSAlert()
         alert.messageText = "File Changed Externally"
         alert.informativeText = "The file \"\(url.lastPathComponent)\" was modified by another application. Reload?"
@@ -1106,12 +1145,27 @@ final class AppState {
         guard let window = viewRefs.textView?.window ?? NSApp.keyWindow else {
             if alert.runModal() == .alertFirstButtonReturn {
                 reloadExternallyChangedFile(url: url)
+            } else {
+                // If user chooses "Keep Current", update cache hash to avoid re-prompt immediately
+                let cacheKey = FileContentCache.quickHash(url: url)
+                fileCache.updateHash(for: url, to: cacheKey)
             }
+            isShowingExternalChangePrompt = false
             return
         }
 
         alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn else { return }
+            defer {
+                self?.isShowingExternalChangePrompt = false
+            }
+            guard response == .alertFirstButtonReturn else {
+                // If user chooses "Keep Current", update cache hash to avoid re-prompt immediately
+                if let self = self, self.selectedFileURL == url {
+                    let cacheKey = FileContentCache.quickHash(url: url)
+                    self.fileCache.updateHash(for: url, to: cacheKey)
+                }
+                return
+            }
             self?.reloadExternallyChangedFile(url: url)
         }
     }
