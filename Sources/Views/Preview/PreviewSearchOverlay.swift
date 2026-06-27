@@ -198,13 +198,11 @@ struct SearchOverlay: View {
     // MARK: - Actions
 
     private func close() {
+        viewRefs?.lastSearchQuery = ""
         if isEditMode {
             clearEditorHighlights()
-            webView?()?.evaluateJavaScript(SearchJS.clearHighlights())
-        } else {
-            viewRefs?.lastSearchQuery = ""
-            webView?()?.evaluateJavaScript(SearchJS.clearHighlights())
         }
+        webView?()?.evaluateJavaScript(SearchJS.clearHighlights())
         onClose?()
     }
 
