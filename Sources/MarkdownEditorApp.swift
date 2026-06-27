@@ -248,19 +248,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             WindowManager.shared.createWindow()
         }
 
-        // Remove the system "Show Tab Bar" menu item from View menu
+        // Remove the system "Show Tab Bar" menu item from View menu.
+        // The item may be added asynchronously by SwiftUI, so observe
+        // NSMenu.didAddItemNotification to catch it whenever it appears.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(menuDidAddItem(_:)),
+            name: NSMenu.didAddItemNotification,
+            object: nil
+        )
+        // Also try once immediately for the common case.
         DispatchQueue.main.async {
-            self.removeSystemTabBarMenuItem()
+            self.removeTabBarMenuItems()
         }
     }
 
-    private func removeSystemTabBarMenuItem() {
+    @objc private func menuDidAddItem(_ notification: Notification) {
+        removeTabBarMenuItems()
+    }
+
+    private func removeTabBarMenuItems() {
         guard let mainMenu = NSApp.mainMenu else { return }
         for menuItem in mainMenu.items {
             if menuItem.title == "View" || menuItem.submenu?.title == "View" {
                 guard let viewMenu = menuItem.submenu else { continue }
                 for (index, item) in viewMenu.items.enumerated().reversed() {
-                    if item.title == "Show Tab Bar" || item.title == "Hide Tab Bar" {
+                    if item.title == "Show Tab Bar" || item.title == "Hide Tab Bar" || item.title == "Show All Tabs" {
                         viewMenu.removeItem(at: index)
                     }
                 }
