@@ -247,6 +247,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             WindowManager.shared.createWindow()
         }
+
+        // Remove the system "Show Tab Bar" menu item from View menu
+        DispatchQueue.main.async {
+            self.removeSystemTabBarMenuItem()
+        }
+    }
+
+    private func removeSystemTabBarMenuItem() {
+        guard let mainMenu = NSApp.mainMenu else { return }
+        for menuItem in mainMenu.items {
+            if menuItem.title == "View" || menuItem.submenu?.title == "View" {
+                guard let viewMenu = menuItem.submenu else { continue }
+                for (index, item) in viewMenu.items.enumerated().reversed() {
+                    if item.title == "Show Tab Bar" || item.title == "Hide Tab Bar" {
+                        viewMenu.removeItem(at: index)
+                    }
+                }
+                break
+            }
+        }
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
@@ -337,6 +357,11 @@ struct MarkdownEditorApp: App {
         .defaultSize(width: 1200, height: 800)
         .commands {
             CommandGroup(after: .newItem) {
+                Button("New Tab") {
+                    focusedAppState()?.openNewTab()
+                }
+                .keyboardShortcut("t", modifiers: .command)
+
                 Button("New Window") {
                     WindowManager.shared.createWindow()
                 }

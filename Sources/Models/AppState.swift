@@ -59,6 +59,12 @@ final class AppState {
     /// Set of directory URL paths that are collapsed in the sidebar.
     var collapsedFolderPaths: Set<String> = []
 
+    /// Ordered list of files currently shown in the tab bar.
+    var tabOrder: [FileTreeItem] = []
+
+    /// Per-tab cursor/scroll state, keyed by file path.
+    var tabStates: [String: TabState] = [:]
+
     var isCurrentFileHTML: Bool {
         currentFileURL?.isHTMLEditorFile ?? false
     }
@@ -259,6 +265,15 @@ final class AppState {
             return
         }
 
+        // Skip if file belongs to an open folder
+        let inFolder = rootFolders.contains { folder in
+            folder.allFiles.contains { $0.url == url }
+        }
+        if inFolder, let folderItem = fileIndex.values.first(where: { $0.url == url }) {
+            selectedFileID = folderItem.id
+            return
+        }
+
         let item = FileTreeItem(url: url, name: url.lastPathComponent, isDirectory: false, parentID: nil)
         openFiles.append(item)
         fileIndex[item.id] = item
@@ -333,11 +348,24 @@ final class AppState {
         if let item = openFiles.first(where: { $0.id == id }) {
             fileCache.evict(item.url)
             htmlCache.removeObject(forKey: item.url.path as NSString)
+            tabStates.removeValue(forKey: item.url.path)
         }
         openFiles.removeAll { $0.id == id }
-        fileIndex.removeValue(forKey: id)
+        // Sync tab bar
+        if let tabIdx = tabOrder.firstIndex(where: { $0.id == id }) {
+            let removedURL = tabOrder[tabIdx].url
+            fileCache.evict(removedURL)
+            htmlCache.removeObject(forKey: removedURL.path as NSString)
+            tabStates.removeValue(forKey: removedURL.path)
+            tabOrder.remove(at: tabIdx)
+        }
+        rebuildFileIndex()
         if selectedFileID == id {
-            clearSelection()
+            if let last = tabOrder.last {
+                selectedFileID = last.id
+            } else {
+                clearSelection()
+            }
         }
     }
 
@@ -348,6 +376,93 @@ final class AppState {
             closeFile(id: id)
         } else {
             // File belongs to a folder — just clear the selection
+            clearSelection()
+        }
+    }
+
+    // MARK: - Tab Management
+
+    func saveTabState(for filePath: String, cursor: Int, scrollOffset: CGFloat) {
+        tabStates[filePath] = TabState(cursorPosition: cursor, scrollOffset: scrollOffset)
+    }
+
+    func restoreTabState(for filePath: String) -> TabState? {
+        tabStates[filePath]
+    }
+
+    /// Open a file in a new tab. If no tabs exist yet, the current file becomes
+    /// the first tab before appending the new one.
+    func openFileInNewTab(url: URL) {
+        let ext = url.pathExtension.lowercased()
+        guard FileService.isSupportedFileExtension(ext) else { return }
+
+        // Already in tabs — just select it
+        if let existing = tabOrder.first(where: { $0.url == url }) {
+            selectedFileID = existing.id
+            return
+        }
+
+        // If no tabs yet, seed with the currently viewed file
+        if tabOrder.isEmpty {
+            if let currentURL = currentFileURL,
+               let existingItem = fileIndex.values.first(where: { $0.url == currentURL }) {
+                tabOrder.append(existingItem)
+            } else if let currentID = selectedFileID,
+                      let currentItem = fileIndex[currentID] {
+                tabOrder.append(currentItem)
+            }
+        }
+
+        let item = FileTreeItem(url: url, name: url.lastPathComponent, isDirectory: false, parentID: nil)
+        tabOrder.append(item)
+        fileIndex[item.id] = item
+        selectedFileID = item.id
+    }
+
+    /// Replace a tab's file with a new file (sidebar click, not "Open in New Tab").
+    func replaceTab(oldID: String, newID: String) {
+        guard let item = fileIndex[newID] else { return }
+        if let tabIdx = tabOrder.firstIndex(where: { $0.id == oldID }) {
+            tabOrder[tabIdx] = item
+        }
+    }
+
+    func openNewTab() {
+        let panel = NSOpenPanel()
+        let mdType = UTType(filenameExtension: "md") ?? .plainText
+        panel.allowedContentTypes = [mdType, .plainText, .text]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.title = "Open File in New Tab"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        openFileInNewTab(url: url)
+    }
+
+    func closeTab(id: String) {
+        saveCurrentFileIfDirty()
+        if let item = tabOrder.first(where: { $0.id == id }) {
+            fileCache.evict(item.url)
+            htmlCache.removeObject(forKey: item.url.path as NSString)
+            tabStates.removeValue(forKey: item.url.path)
+        }
+        tabOrder.removeAll { $0.id == id }
+        rebuildFileIndex()
+        if selectedFileID == id {
+            // Switch to adjacent tab if available
+            if let last = tabOrder.last {
+                selectedFileID = last.id
+            } else {
+                clearSelection()
+            }
+        }
+    }
+
+    func closeCurrentTab() {
+        guard let id = selectedFileID else { return }
+        if tabOrder.contains(where: { $0.id == id }) {
+            closeTab(id: id)
+        } else {
             clearSelection()
         }
     }
@@ -419,6 +534,9 @@ final class AppState {
         folderWatchers[id]?.stop()
         folderWatchers.removeValue(forKey: id)
         rootFolders.remove(at: idx)
+        // Remove files that belonged to this folder from openFiles
+        let folderPaths = Set(folder.allFiles.map { $0.url.path })
+        openFiles.removeAll { folderPaths.contains($0.url.path) }
         rebuildFileIndex()
 
         // Only clear content when the selected file was inside the removed folder.
@@ -664,10 +782,6 @@ final class AppState {
     }
 
     func selectFile(id: String) {
-        // Note: saveCurrentFileIfDirty intentionally NOT called here to avoid
-        // blocking the main thread during rapid file switching. The previous
-        // file's dirty content is held in fileCache and saved when
-        // the file is closed, the window is closed, or Cmd+S is pressed.
         guard let item = fileIndex[id] else { return }
         loadFileContent(url: item.url, id: item.id)
     }
@@ -1106,9 +1220,11 @@ final class AppState {
         folderWatchers.removeAll()
         rootFolders.removeAll()
         openFiles.removeAll()
+        tabOrder.removeAll()
         fileCache.removeAll()
         htmlCache.removeAllObjects()
         fileIndex.removeAll()
+        tabStates.removeAll()
         selectedFileID = nil
         selectedFileURL = nil
         currentFileURL = nil

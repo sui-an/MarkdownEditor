@@ -63,18 +63,23 @@ struct ContentView: View {
                 SidebarView(appState: appState)
                     .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 400)
             } detail: {
-                ResizableHSplitView(
-                    minLeftWidth: 200,
-                    minRightWidth: 200,
-                    collapsed: appState.previewOnly,
-                    left: EditorContainerView(appState: appState, viewRefs: appState.viewRefs, themeMode: themeMode),
-                    right: PreviewWithFontSizeView(
-                        appState: appState,
-                        themeMode: themeMode,
-                        webViewCache: appState.webViewCache
+                VStack(spacing: 0) {
+                    if appState.tabOrder.count > 1 {
+                        TabBarView(appState: appState)
+                    }
+                    ResizableHSplitView(
+                        minLeftWidth: 200,
+                        minRightWidth: 200,
+                        collapsed: appState.previewOnly,
+                        left: EditorContainerView(appState: appState, viewRefs: appState.viewRefs, themeMode: themeMode),
+                        right: PreviewWithFontSizeView(
+                            appState: appState,
+                            themeMode: themeMode,
+                            webViewCache: appState.webViewCache
+                        )
+                        .frame(minWidth: 200)
                     )
-                    .frame(minWidth: 200)
-                )
+                }
             }
             .navigationSplitViewStyle(.balanced)
             .navigationTitle(windowTitle)
@@ -200,7 +205,7 @@ struct ContentView: View {
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .allowsHitTesting(false)
-            Button("") { appState.closeCurrentFile() }
+            Button("") { appState.closeCurrentTab() }
                 .keyboardShortcut("w", modifiers: .command)
                 .frame(width: 0, height: 0)
                 .opacity(0)

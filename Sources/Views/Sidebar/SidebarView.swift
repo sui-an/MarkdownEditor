@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct SidebarView: View {
     let appState: AppState
     @State private var renameTarget: RenameTarget?
+    @State private var previousSelectedFileID: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,10 +29,22 @@ struct SidebarView: View {
 
             List(selection: Bindable(appState).selectedFileID) {
 
-                // Opened individual files
-                if !appState.openFiles.isEmpty {
+                // Opened individual files (exclude files already in a folder)
+                let standaloneFiles = appState.openFiles.filter { file in
+                    !appState.rootFolders.contains { folder in
+                        folder.allFiles.contains { $0.url == file.url }
+                    }
+                }
+                if !standaloneFiles.isEmpty {
                     Section("Opened Files") {
-                        OpenFilesList(appState: appState, renameTarget: $renameTarget)
+                        ForEach(standaloneFiles) { item in
+                            OpenFileRow(
+                                item: item,
+                                isSelected: appState.selectedFileID == item.id,
+                                renameTarget: $renameTarget,
+                                appState: appState
+                            )
+                        }
                     }
                 }
 
@@ -81,9 +94,16 @@ struct SidebarView: View {
             .listStyle(.sidebar)
         }
         .frame(minWidth: 180)
-        .onChange(of: appState.selectedFileID) { _, newValue in
+        .onChange(of: appState.selectedFileID) { oldValue, newValue in
             guard let id = newValue else { return }
             appState.selectedDirectoryID = nil
+            // When tabs are active and new file is NOT a tab, replace the old tab
+            if !appState.tabOrder.isEmpty,
+               let oldID = oldValue,
+               !appState.tabOrder.contains(where: { $0.id == id }) {
+                appState.replaceTab(oldID: oldID, newID: id)
+            }
+            previousSelectedFileID = newValue
             appState.prepareFileSwitch(to: id)
             appState.selectFile(id: id)
         }
@@ -147,6 +167,9 @@ private struct FolderFileRow: View {
         .contentShape(Rectangle())
         .tag(item.id)
         .contextMenu {
+            Button("Open in New Tab") {
+                appState.openFileInNewTab(url: item.url)
+            }
             Button("Rename") {
                 renameTarget = RenameTarget(
                     id: item.id,
@@ -225,6 +248,10 @@ private struct OpenFileRow: View {
         .contentShape(Rectangle())
         .tag(item.id)
         .contextMenu {
+            Button("Open in New Tab") {
+                appState.openFileInNewTab(url: item.url)
+            }
+            Divider()
             Button("Rename") {
                 renameTarget = RenameTarget(
                     id: item.id,

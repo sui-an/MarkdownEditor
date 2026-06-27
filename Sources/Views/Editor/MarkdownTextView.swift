@@ -386,8 +386,19 @@ struct MarkdownTextView: NSViewRepresentable {
 
         let isFileSwitch = coordinator.lastFileURL != currentFileURL
 
+        // Get appState from the text view's window
+        let appState: AppState? = textView.window.flatMap { objc_getAssociatedObject($0, &AppDelegate.focusedStateHandle) as? AppState }
+
         // Phase 1: file-switch (currentFileURL changed)
         if isFileSwitch {
+            // Save current tab state before switching
+            if let oldFilePath = coordinator.lastFileURL?.path {
+                appState?.saveTabState(
+                    for: oldFilePath,
+                    cursor: textView.selectedRange().location,
+                    scrollOffset: scrollView.contentView.bounds.origin.y
+                )
+            }
             coordinator.lastFileURL = currentFileURL
             coordinator.hasInlineImages = text.contains("![")
             coordinator.hasInlineImageAttachments = false
@@ -397,8 +408,9 @@ struct MarkdownTextView: NSViewRepresentable {
             // Skip when text is still the previous file's content (cache miss)
             // to avoid NSTextStorage re-layout flash.
             if !text.isEmpty && text != textView.string {
-                coordinator.resetScrollPosition(scrollView)
-                coordinator.applyLoadedTextWithoutFlash(text, to: textView, isDark: isDark, fontSize: fontSize)
+                let savedState = appState?.restoreTabState(for: currentFileURL?.path ?? "")
+                coordinator.applyLoadedTextWithoutFlash(text, to: textView, isDark: isDark, fontSize: fontSize, savedCursor: savedState?.cursorPosition ?? 0)
+                coordinator.restoreScrollPosition(scrollView, offset: savedState?.scrollOffset ?? 0)
                 coordinator.pendingContentLoad = false
                 coordinator.scheduleImageProcessing()
                 wrapper.lineNumberView.needsDisplay = true
@@ -417,8 +429,9 @@ struct MarkdownTextView: NSViewRepresentable {
                 return
             }
 
-            coordinator.resetScrollPosition(scrollView)
-            coordinator.applyLoadedTextWithoutFlash(text, to: textView, isDark: isDark, fontSize: fontSize)
+            let savedState = appState?.restoreTabState(for: currentFileURL?.path ?? "")
+            coordinator.applyLoadedTextWithoutFlash(text, to: textView, isDark: isDark, fontSize: fontSize, savedCursor: savedState?.cursorPosition ?? 0)
+            coordinator.restoreScrollPosition(scrollView, offset: savedState?.scrollOffset ?? 0)
             coordinator.scheduleImageProcessing()
             coordinator.editorWrapper?.lineNumberView.needsDisplay = true
             if text.isEmpty {
@@ -522,7 +535,16 @@ struct MarkdownTextView: NSViewRepresentable {
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
 
-        func applyLoadedTextWithoutFlash(_ text: String, to textView: NSTextView, isDark: Bool, fontSize: CGFloat) {
+        func restoreScrollPosition(_ scrollView: NSScrollView, offset: CGFloat) {
+            DispatchQueue.main.async {
+                var bounds = scrollView.contentView.bounds
+                bounds.origin.y = offset
+                scrollView.contentView.bounds = bounds
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
+        }
+
+        func applyLoadedTextWithoutFlash(_ text: String, to textView: NSTextView, isDark: Bool, fontSize: CGFloat, savedCursor: Int = 0) {
             hasInlineImageAttachments = false
             suppressTextDidChange = true
             if let storage = textView.textStorage as? MarkdownTextStorage {
@@ -531,7 +553,8 @@ struct MarkdownTextView: NSViewRepresentable {
             } else {
                 textView.string = text
             }
-            textView.setSelectedRange(NSRange(location: 0, length: 0))
+            let safeLocation = min(savedCursor, (text as NSString).length)
+            textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
             suppressTextDidChange = false
         }
 
